@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -27,8 +28,8 @@ class EmailServiceTest {
     assertTrue(service.sendVerificationEmail("user@example.com", "verify-token"));
 
     verify(emailSender).send(
-        "user@example.com",
-        "Xác minh tài khoản DISCWAKE",
+        eq("user@example.com"),
+        eq("Xác minh tài khoản DISCWAKE"),
         contains("Cảm ơn bạn đã đăng ký tài khoản"));
   }
 
@@ -44,8 +45,8 @@ class EmailServiceTest {
     assertTrue(service.sendPaymentSuccessEmail("buyer@example.com", order));
 
     verify(emailSender).send(
-        "buyer@example.com",
-        "Xác nhận thanh toán thành công",
+        eq("buyer@example.com"),
+        eq("Xác nhận thanh toán thành công"),
         contains("Cảm ơn bạn đã thanh toán thành công"));
   }
 
@@ -67,8 +68,8 @@ class EmailServiceTest {
 
     ArgumentCaptor<byte[]> attachmentCaptor = ArgumentCaptor.forClass(byte[].class);
     verify(emailSender).send(
-        "disc@example.com",
-        "Báo cáo DISC của bạn đã sẵn sàng",
+        eq("disc@example.com"),
+        eq("Báo cáo DISC của bạn đã sẵn sàng"),
         contains("đính kèm file PDF báo cáo"),
         anyString(),
         attachmentCaptor.capture());
@@ -92,8 +93,8 @@ class EmailServiceTest {
     assertTrue(service.sendDiscReportEmail("disc@example.com", session, result, pdfBytes));
 
     verify(emailSender).send(
-        "disc@example.com",
-        "Báo cáo DISC của bạn đã sẵn sàng",
+        eq("disc@example.com"),
+        eq("Báo cáo DISC của bạn đã sẵn sàng"),
         contains("Báo cáo PDF của bạn đã sẵn sàng"));
     verify(emailSender, never()).send(
         anyString(),
