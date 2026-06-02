@@ -51,7 +51,7 @@ const UserDashboard = () => {
             <p className="text-lg font-bold text-accent">{user?.pdfExportCredits ?? 0}</p>
           </div>
           <div className="mt-4 flex gap-2">
-            <Link to="/plans" className="btn btn-outline btn-sm">
+            <Link to="/plans#user-plans" className="btn btn-outline btn-sm">
               Nâng cấp gói
             </Link>
             <Link to="/test" className="btn btn-primary btn-sm">

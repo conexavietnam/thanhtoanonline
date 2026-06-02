@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { useNavigate, useSearchParams } from "react-router";
 import { useAuth } from "../../context/AuthContext";
@@ -17,8 +17,50 @@ const CheckoutPage = () => {
   const [error, setError] = useState(null)
   const [showQrModal, setShowQrModal] = useState(false)
   const [createdPayment, setCreatedPayment] = useState(null)
+  const [pollStatus, setPollStatus] = useState("idle") // idle|waiting|completed|failed
   // Quốc Trí: khóa submit bằng ref để chặn double-click tạo nhiều order/pending payment.
   const submitLockRef = useRef(false)
+  const pollRef = useRef(null)
+
+  const pollOrderStatus = useCallback(async (orderId) => {
+    try {
+      const { data } = await api.get(`/users/me/orders/${orderId}/status`)
+      if (data.status === "COMPLETED") {
+        setPollStatus("completed")
+        setTimeout(() => {
+          navigate(`/thank-you?ref=${data.paymentReference}&plan=${selectedPlan?.code}`, { replace: true })
+        }, 800)
+        return true
+      }
+      if (data.status === "FAILED" || data.status === "CANCELLED") {
+        setPollStatus("failed")
+        return true
+      }
+      return false
+    } catch {
+      return false
+    }
+  }, [navigate, selectedPlan])
+
+  useEffect(() => {
+    if (pollStatus === "waiting" && createdPayment) {
+      pollRef.current = setInterval(async () => {
+        const done = await pollOrderStatus(createdPayment.id)
+        if (done) {
+          clearInterval(pollRef.current)
+          pollRef.current = null
+        }
+      }, 5000)
+      // Also poll immediately
+      pollOrderStatus(createdPayment.id)
+      return () => {
+        if (pollRef.current) {
+          clearInterval(pollRef.current)
+          pollRef.current = null
+        }
+      }
+    }
+  }, [pollStatus, createdPayment, pollOrderStatus])
 
   const [form, setForm] = useState({
     phone: "",
@@ -117,6 +159,7 @@ const CheckoutPage = () => {
         }
         setCreatedPayment(data)
         setShowQrModal(true)
+        setPollStatus("waiting")
         return
       }
 
@@ -135,9 +178,8 @@ const CheckoutPage = () => {
   }
 
   const handleCompleteTransfer = () => {
-    navigate(`/thank-you?ref=${createdPayment?.paymentReference}&plan=${selectedPlan.code}`, {
-      replace: true,
-    })
+    // Do nothing - polling in background will navigate when status is COMPLETED
+    toast.success("Đang kiểm tra trạng thái thanh toán...")
   }
 
   if (initializing || loading) {
@@ -538,12 +580,49 @@ const CheckoutPage = () => {
               </div>
 
               <div className="card-actions w-full">
-                <button
-                  className="btn btn-primary w-full"
-                  onClick={handleCompleteTransfer}
-                >
-                  Đã chuyển khoản xong
-                </button>
+                {pollStatus === "waiting" && (
+                  <div className="flex flex-col items-center w-full gap-2">
+                    <div className="flex items-center gap-2 text-base-content/70">
+                      <span className="loading loading-spinner loading-sm text-primary" />
+                      <span>Đang chờ xác nhận thanh toán...</span>
+                    </div>
+                    <p className="text-xs text-base-content/50">Trang sẽ tự động chuyển khi thanh toán được xác nhận</p>
+                  </div>
+                )}
+                {pollStatus === "completed" && (
+                  <div className="flex flex-col items-center w-full gap-2">
+                    <div className="flex items-center gap-2 text-success">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                      <span>Thanh toán thành công! Đang chuyển hướng...</span>
+                    </div>
+                  </div>
+                )}
+                {pollStatus === "failed" && (
+                  <div className="flex flex-col items-center w-full gap-2">
+                    <div className="flex items-center gap-2 text-error">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                      </svg>
+                      <span>Thanh toán thất bại. Vui lòng thử lại.</span>
+                    </div>
+                    <button
+                      className="btn btn-outline btn-sm mt-2"
+                      onClick={() => { setShowQrModal(false); setPollStatus("idle"); setCreatedPayment(null) }}
+                    >
+                      Thử lại
+                    </button>
+                  </div>
+                )}
+                {pollStatus === "idle" && (
+                  <button
+                    className="btn btn-primary w-full"
+                    onClick={handleCompleteTransfer}
+                  >
+                    Đã chuyển khoản xong
+                  </button>
+                )}
                 <button
                   className="btn btn-ghost w-full btn-sm mt-2"
                   onClick={() => setShowQrModal(false)}

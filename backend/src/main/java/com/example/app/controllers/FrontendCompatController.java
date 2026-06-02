@@ -170,7 +170,8 @@ public class FrontendCompatController {
 
     String provider = rawProvider.trim().toUpperCase(Locale.ROOT);
     return switch (provider) {
-      case "BANK_TRANSFER", "MANUAL" -> PaymentProvider.MANUAL;
+      case "BANK_TRANSFER" -> PaymentProvider.SEPAY;
+      case "MANUAL" -> PaymentProvider.MANUAL;
       case "VNPAY", "VN_PAY" -> PaymentProvider.VNPAY;
       case "MOMO" -> PaymentProvider.MOMO;
       default -> throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_PROVIDER", "Unsupported payment provider");
