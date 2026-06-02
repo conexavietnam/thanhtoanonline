@@ -167,6 +167,9 @@ class SepayWebhookControllerTest {
 
   @Test
   void webhookNoUuidInContentReturns400() throws Exception {
+    when(orderRepository.findTop300ByStatusOrderByCreatedAtDesc(OrderStatus.PENDING))
+        .thenReturn(java.util.List.of());
+
     String requestBody = objectMapper.writeValueAsString(
         new SepayWebhookRequest(1L, "VCB", "2024-01-01 12:00:00",
             "123456789", null, null, "NO_UUID_HERE", "in",
@@ -179,8 +182,33 @@ class SepayWebhookControllerTest {
             .header("x-sepay-signature", "sha256=" + sig)
             .header("x-sepay-timestamp", TEST_TIMESTAMP)
             .content(requestBody))
-        .andExpect(status().isBadRequest())
-        .andExpect(content().string("Order ID not found in content"));
+        .andExpect(status().isNotFound())
+        .andExpect(content().string("Order not found"));
+  }
+
+  @Test
+  void webhookFallsBackToPendingOrderByAmountWhenNoUuidPresent() throws Exception {
+    when(orderRepository.findByStatusOrderByCreatedAtDesc(OrderStatus.PENDING))
+        .thenReturn(java.util.List.of(testOrder));
+    when(billingService.completeOrder(orderId)).thenReturn(testOrder);
+
+    String requestBody = objectMapper.writeValueAsString(
+        new SepayWebhookRequest(1L, "MB", "2026-06-02 16:16:40",
+            "0550123666868", null, "DH123", "MBVCB.14497380792.504946.a941188087de4306a017621aa4ecc6e7.CT tu 0211000508324 DAO KHAC CU toi 0550123666868 DAO KHAC CU tai MB- Ma GD ACSP/",
+            "in", "DAO KHAC CU chuyen tien", 199000L, null, null, null, null));
+
+    String sig = hmacHex(TEST_SECRET, TEST_TIMESTAMP + "." + requestBody);
+
+    mockMvc.perform(post("/api/public/payments/sepay/webhook")
+            .contentType(MediaType.APPLICATION_JSON)
+            .header("x-sepay-signature", "sha256=" + sig)
+            .header("x-sepay-timestamp", TEST_TIMESTAMP)
+            .content(requestBody))
+        .andExpect(status().isOk())
+        .andExpect(content().string("OK"));
+
+    verify(billingService).completeOrder(orderId);
+    verify(emailService).sendPaymentSuccessEmail("user@example.com", testOrder);
   }
 
   @Test

@@ -14,6 +14,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.List;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -91,7 +92,12 @@ public class SepayWebhookController {
     }
 
     String content = StringUtils.hasText(request.content()) ? request.content() : request.description();
-    if (content == null || content.isBlank()) {
+    String referenceText = firstText(
+        request.code(),
+        request.content(),
+        request.description(),
+        request.rawData() != null ? request.rawData().toString() : null);
+    if (referenceText == null || referenceText.isBlank()) {
       log.warn("SEPAY webhook empty content/description");
       return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Empty content");
     }
@@ -101,25 +107,13 @@ public class SepayWebhookController {
       return ResponseEntity.ok("Ignored");
     }
 
-    Matcher matcher = UUID_PATTERN.matcher(content);
-    if (!matcher.find()) {
-      log.warn("SEPAY webhook no UUID in content: {}", content);
-      return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Order ID not found in content");
-    }
-
-    UUID orderId;
-    try {
-      orderId = UUID.fromString(matcher.group());
-    } catch (IllegalArgumentException e) {
-      log.error("Invalid UUID in content: {}", content, e);
-      return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Invalid order ID");
-    }
-
-    Order order = orderRepository.findById(orderId).orElse(null);
+    Order order = resolveOrder(referenceText, request.transferAmount());
     if (order == null) {
-      log.warn("SEPAY webhook order not found: {}", orderId);
+      log.warn("SEPAY webhook order not found for reference={} amount={}",
+          referenceText, request.transferAmount());
       return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Order not found");
     }
+    UUID orderId = order.getId();
 
     if (request.transferAmount() != null && request.transferAmount() < order.getAmountVnd()) {
       log.warn("SEPAY webhook amount mismatch order={} expected={} actual={}",
@@ -134,6 +128,7 @@ public class SepayWebhookController {
     payload.put("transferAmount", request.transferAmount() != null ? request.transferAmount() : 0);
     payload.put("content", request.content());
     payload.put("description", request.description());
+    payload.put("code", request.code());
     payload.put("transferType", request.transferType());
     payload.put("transactionDate", request.transactionDate());
     payload.put("accountNumber", request.accountNumber());
@@ -202,6 +197,55 @@ public class SepayWebhookController {
       return sepaySignature;
     }
     return headerValue(headers, "signature");
+  }
+
+  private Order resolveOrder(String referenceText, Long transferAmount) {
+    Matcher matcher = UUID_PATTERN.matcher(referenceText);
+    if (matcher.find()) {
+      try {
+        UUID orderId = UUID.fromString(matcher.group());
+        Order order = orderRepository.findById(orderId).orElse(null);
+        if (order != null) {
+          return order;
+        }
+      } catch (IllegalArgumentException e) {
+        log.warn("SEPAY webhook found invalid UUID in reference text: {}", referenceText);
+      }
+    }
+
+    if (transferAmount == null) {
+      log.warn("SEPAY webhook missing amount for fallback order resolution");
+      return null;
+    }
+
+    List<Order> candidates = orderRepository.findByStatusOrderByCreatedAtDesc(OrderStatus.PENDING).stream()
+        .filter(order -> order.getProvider() == PaymentProvider.SEPAY)
+        .filter(order -> order.getAmountVnd() == transferAmount)
+        .toList();
+
+    if (candidates.size() == 1) {
+      return candidates.get(0);
+    }
+
+    if (candidates.isEmpty()) {
+      return null;
+    }
+
+    log.warn("SEPAY webhook ambiguous fallback candidates amount={} count={}",
+        transferAmount, candidates.size());
+    return null;
+  }
+
+  private String firstText(String... values) {
+    if (values == null) {
+      return null;
+    }
+    for (String value : values) {
+      if (StringUtils.hasText(value)) {
+        return value;
+      }
+    }
+    return null;
   }
 
   private String headerValue(java.util.Map<String, String> headers, String name) {
