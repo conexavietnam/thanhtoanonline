@@ -67,6 +67,9 @@ public class TestSession {
   @Column(name = "completed_at")
   private Instant completedAt;
 
+  @Column(name = "report_email_sent_at")
+  private Instant reportEmailSentAt;
+
   @Column(name = "cost_vnd", nullable = false)
   private long costVnd = 0;
 

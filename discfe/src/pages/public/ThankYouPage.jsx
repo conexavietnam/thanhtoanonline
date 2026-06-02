@@ -95,10 +95,10 @@ const ThankYouPage = () => {
                 </svg>
               </div>
               <h1 className="text-4xl md:text-5xl font-bold text-base-content mb-4">
-                Cam on ban da mua hang!
+                Cảm ơn bạn đã mua hàng!
               </h1>
               <p className="text-lg text-base-content/70 mb-2">
-                Don hang cua ban da duoc xu ly thanh cong
+                Đơn hàng của bạn đã được xử lý thành công
               </p>
             </>
           ) : (
@@ -118,21 +118,21 @@ const ThankYouPage = () => {
                 </svg>
               </div>
               <h1 className="text-4xl md:text-5xl font-bold text-base-content mb-4">
-                Don hang dang cho xu ly
+                Đơn hàng đang chờ xử lý
               </h1>
               <p className="text-lg text-base-content/70 mb-2">
-                Thanh toan cua ban dang duoc xac nhan. Ban se nhan duoc email khi hoan tat.
+                Thanh toán của bạn đang được xác nhận. Bạn sẽ nhận được email khi hoàn tất.
               </p>
             </>
           )}
           {paymentReference && (
             <p className="text-sm text-base-content/60">
-              Ma thanh toan: <span className="font-mono font-semibold">{paymentReference}</span>
+              Mã thanh toán: <span className="font-mono font-semibold">{paymentReference}</span>
             </p>
           )}
           {orderId && (
             <p className="text-sm text-base-content/60">
-              Ma don hang: <span className="font-mono font-semibold">{orderId}</span>
+              Mã đơn hàng: <span className="font-mono font-semibold">{orderId}</span>
             </p>
           )}
         </div>
@@ -150,22 +150,22 @@ const ThankYouPage = () => {
                   >
                     <path d="M10.394 2.08a1 1 0 00-.788 0l-7 3a1 1 0 000 1.84L5.25 8.051a.999.999 0 01.356-.257l4-1.714a1 1 0 11.788 1.838L7.667 9.088l1.94.831a1 1 0 00.787 0l7-3a1 1 0 000-1.838l-7-3z" />
                   </svg>
-                  Buoc tiep theo
+                  Bước tiếp theo
                 </h2>
                 <div className="space-y-3 text-base-content/80">
                   {isCompleted ? (
                     <>
-                      <p>Don hang cua ban da duoc xu ly. Ban se nhan duoc email xac nhan trong vai phut.</p>
-                      <p>Tai khoan cua ban da duoc nang cap tu dong.</p>
+                      <p>Đơn hàng của bạn đã được xử lý. Bạn sẽ nhận được email xác nhận trong vài phút.</p>
+                      <p>Tài khoản của bạn đã được nâng cấp tự động.</p>
                     </>
                   ) : (
                     <>
-                      <p>Don hang cua ban dang duoc xu ly. Ban se nhan duoc email xac nhan trong vai phut.</p>
-                      <p>Sau khi thanh toan duoc xac nhan, tai khoan cua ban se duoc nang cap tu dong.</p>
+                      <p>Đơn hàng của bạn đang được xử lý. Bạn sẽ nhận được email xác nhận trong vài phút.</p>
+                      <p>Sau khi thanh toán được xác nhận, tài khoản của bạn sẽ được nâng cấp tự động.</p>
                     </>
                   )}
                   <p>
-                    Ban co the truy cap <Link to="/dashboard/results" className="link link-primary font-semibold">Ket qua chi tiet</Link> de xem toan bo bao cao DISC.
+                    Bạn có thể truy cập <Link to="/dashboard/results" className="link link-primary font-semibold">Kết quả chi tiết</Link> để xem toàn bộ báo cáo DISC.
                   </p>
                 </div>
               </div>
@@ -187,10 +187,10 @@ const ThankYouPage = () => {
                     </div>
                     <div className="flex-1">
                       <h3 className="text-xl font-bold text-base-content mb-2">
-                        Tham gia nhom Zalo de duoc tu van sau hon
+                        Tham gia nhóm Zalo để được tư vấn sâu hơn
                       </h3>
                       <p className="text-base-content/70 mb-4">
-                        Tham gia nhom Zalo cua chung toi de nhan ho tro truc tiep, chia se kinh nghiem va duoc tu van chi tiet ve ket qua DISC cua ban.
+                        Tham gia nhóm Zalo của chúng tôi để nhận hỗ trợ trực tiếp, chia sẻ kinh nghiệm và được tư vấn chi tiết về kết quả DISC của bạn.
                       </p>
                       <a
                         href={settings.zaloGroupLink}
@@ -206,7 +206,7 @@ const ThankYouPage = () => {
                         >
                           <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />
                         </svg>
-                        Tham gia nhom Zalo ngay
+                        Tham gia nhóm Zalo ngay
                       </a>
                     </div>
                   </div>
@@ -223,7 +223,7 @@ const ThankYouPage = () => {
                   >
                     <path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z" />
                   </svg>
-                  Ve Dashboard
+                  Về Dashboard
                 </Link>
                 <Link to="/dashboard/results" className="btn btn-outline btn-lg flex-1">
                   <svg
@@ -239,7 +239,7 @@ const ThankYouPage = () => {
                       clipRule="evenodd"
                     />
                   </svg>
-                  Xem ket qua chi tiet
+                  Xem kết quả chi tiết
                 </Link>
               </div>
             </div>
@@ -247,7 +247,7 @@ const ThankYouPage = () => {
         </div>
 
         <div className="text-center text-sm text-base-content/60">
-          <p>Ban se duoc chuyen ve Dashboard sau <span className="font-semibold text-primary">10 giay</span></p>
+          <p>Bạn sẽ được chuyển về Dashboard sau <span className="font-semibold text-primary">10 giây</span></p>
         </div>
       </div>
     </div>

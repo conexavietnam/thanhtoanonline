@@ -50,12 +50,14 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class PartnerTestService {
   private static final long PAID_TEST_COST_VND = 300_000L;
   private static final int PAID_QUESTION_TARGET = 50;
@@ -70,6 +72,8 @@ public class PartnerTestService {
   private final ResultRepository resultRepository;
   private final PdfExportRepository pdfExportRepository;
   private final AssessmentQuestionSelectionService assessmentQuestionSelectionService;
+  private final EmailService emailService;
+  private final PdfDocumentService pdfDocumentService;
   private final ObjectMapper objectMapper;
 
   @Transactional
@@ -143,10 +147,12 @@ public class PartnerTestService {
 
   @Transactional
   public TestResultResponse submit(String email, UUID sessionId, SubmitTestRequest request) {
+    AppUser owner = userAccountService.requireByEmail(email);
     TestSession session = requireSessionOwner(email, sessionId);
     if (session.getStatus() == SessionStatus.COMPLETED) {
       Result existing = resultRepository.findBySessionId(session.getId())
           .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "RESULT_NOT_FOUND", "Result not found"));
+      sendDiscReportEmailIfNeeded(owner, session, existing);
       return new TestResultResponse(session.getId(), existing.getSummary(), existing.getResultJson());
     }
 
@@ -181,6 +187,8 @@ public class PartnerTestService {
     session.setStatus(SessionStatus.COMPLETED);
     session.setCompletedAt(Instant.now());
     testSessionRepository.save(session);
+
+    sendDiscReportEmailIfNeeded(owner, session, result);
 
     return new TestResultResponse(session.getId(), resultData.summary(), resultData.resultJson());
   }
@@ -524,6 +532,29 @@ public class PartnerTestService {
     AppUser owner = userAccountService.requireByEmail(email);
     return testSessionRepository.findByIdAndOwnerUserId(sessionId, owner.getId())
         .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "SESSION_NOT_FOUND", "Test session not found"));
+  }
+
+  private void sendDiscReportEmailIfNeeded(AppUser owner, TestSession session, Result result) {
+    if (session == null || owner == null || result == null) {
+      return;
+    }
+
+    if (session.getReportEmailSentAt() != null) {
+      return;
+    }
+
+    byte[] pdfBytes = null;
+    try {
+      pdfBytes = pdfDocumentService.buildReportPdf(session, result);
+    } catch (Exception ex) {
+      log.warn("Failed to build DISC PDF for email session={} error={}", session.getId(), ex.getMessage());
+    }
+
+    boolean sent = emailService.sendDiscReportEmail(owner.getEmail(), session, result, pdfBytes);
+    if (sent) {
+      session.setReportEmailSentAt(Instant.now());
+      testSessionRepository.save(session);
+    }
   }
 
   private TestSessionResponse toSessionResponse(TestSession session, long answeredCount, long totalQuestions) {

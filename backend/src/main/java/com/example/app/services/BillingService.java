@@ -218,7 +218,7 @@ public class BillingService {
 
   @Transactional
   public Order completeOrder(UUID orderId) {
-    Order order = orderRepository.findById(orderId)
+    Order order = orderRepository.findByIdWithCreditPackageAndUser(orderId)
         .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ORDER_NOT_FOUND", "Order not found"));
     completeOrder(order);
     return order;

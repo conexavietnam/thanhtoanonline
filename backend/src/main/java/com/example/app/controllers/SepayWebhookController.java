@@ -91,14 +91,13 @@ public class SepayWebhookController {
       return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid signature");
     }
 
-    String content = StringUtils.hasText(request.content()) ? request.content() : request.description();
     String referenceText = firstText(
         request.code(),
         request.content(),
         request.description(),
         request.rawData() != null ? request.rawData().toString() : null);
     if (referenceText == null || referenceText.isBlank()) {
-      log.warn("SEPAY webhook empty content/description");
+      log.warn("SEPAY webhook empty reference text");
       return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Empty content");
     }
 
@@ -107,7 +106,7 @@ public class SepayWebhookController {
       return ResponseEntity.ok("Ignored");
     }
 
-    Order order = resolveOrder(referenceText, request.transferAmount());
+    Order order = resolveOrder(request.code(), request.content(), request.description(), request.rawData(), request.transferAmount());
     if (order == null) {
       log.warn("SEPAY webhook order not found for reference={} amount={}",
           referenceText, request.transferAmount());
@@ -199,18 +198,10 @@ public class SepayWebhookController {
     return headerValue(headers, "signature");
   }
 
-  private Order resolveOrder(String referenceText, Long transferAmount) {
-    Matcher matcher = UUID_PATTERN.matcher(referenceText);
-    if (matcher.find()) {
-      try {
-        UUID orderId = UUID.fromString(matcher.group());
-        Order order = orderRepository.findById(orderId).orElse(null);
-        if (order != null) {
-          return order;
-        }
-      } catch (IllegalArgumentException e) {
-        log.warn("SEPAY webhook found invalid UUID in reference text: {}", referenceText);
-      }
+  private Order resolveOrder(String code, String content, String description, JsonNode rawData, Long transferAmount) {
+    Order orderByUuid = resolveOrderByUuid(code, content, description, rawData);
+    if (orderByUuid != null) {
+      return orderByUuid;
     }
 
     if (transferAmount == null) {
@@ -218,13 +209,18 @@ public class SepayWebhookController {
       return null;
     }
 
-    List<Order> candidates = orderRepository.findByStatusOrderByCreatedAtDesc(OrderStatus.PENDING).stream()
-        .filter(order -> order.getProvider() == PaymentProvider.SEPAY)
-        .filter(order -> order.getAmountVnd() == transferAmount)
+    long normalizedTransferAmount = transferAmount.longValue();
+    List<Order> pendingOrders = orderRepository.findByStatusOrderByCreatedAtDesc(OrderStatus.PENDING);
+    List<Order> candidates = pendingOrders.stream()
+        .filter(order -> order.getAmountVnd() == normalizedTransferAmount)
         .toList();
 
     if (candidates.size() == 1) {
       return candidates.get(0);
+    }
+
+    if (candidates.isEmpty() && pendingOrders.size() == 1) {
+      return pendingOrders.get(0);
     }
 
     if (candidates.isEmpty()) {
@@ -233,6 +229,34 @@ public class SepayWebhookController {
 
     log.warn("SEPAY webhook ambiguous fallback candidates amount={} count={}",
         transferAmount, candidates.size());
+    return null;
+  }
+
+  private Order resolveOrderByUuid(String code, String content, String description, JsonNode rawData) {
+    for (String referenceText : new String[] {
+        code,
+        content,
+        description,
+        rawData == null ? null : rawData.toString()}) {
+      if (!StringUtils.hasText(referenceText)) {
+        continue;
+      }
+
+      Matcher matcher = UUID_PATTERN.matcher(referenceText);
+      while (matcher.find()) {
+        String candidate = matcher.group();
+        try {
+          UUID orderId = UUID.fromString(candidate);
+          Order order = orderRepository.findById(orderId).orElse(null);
+          if (order != null) {
+            return order;
+          }
+        } catch (IllegalArgumentException e) {
+          log.warn("SEPAY webhook found invalid UUID in reference text: {}", candidate);
+        }
+      }
+    }
+
     return null;
   }
 
