@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.example.app.dto.request.SepayWebhookRequest;
 import com.example.app.models.AppUser;
 import com.example.app.models.CreditPackage;
 import com.example.app.models.Order;
@@ -34,6 +35,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 class SepayWebhookControllerTest {
 
   private static final String TEST_SECRET = "test-secret-123";
+  private static final String TEST_TIMESTAMP = "1712678400";
   private static final ObjectMapper objectMapper = new ObjectMapper();
 
   private MockMvc mockMvc;
@@ -108,6 +110,7 @@ class SepayWebhookControllerTest {
     mockMvc.perform(post("/api/public/payments/sepay/webhook")
             .contentType(MediaType.APPLICATION_JSON)
             .header("x-signature", "invalid-sig")
+            .header("x-sepay-timestamp", TEST_TIMESTAMP)
             .content("{\"content\":\"test\"}"))
         .andExpect(status().isUnauthorized())
         .andExpect(content().string("Invalid signature"));
@@ -116,6 +119,7 @@ class SepayWebhookControllerTest {
   @Test
   void webhookValidSignatureCompletesOrder() throws Exception {
     when(orderRepository.findById(orderId)).thenReturn(Optional.of(testOrder));
+    when(billingService.completeOrder(orderId)).thenReturn(testOrder);
 
     String content = "TT" + orderId;
     String requestBody = objectMapper.writeValueAsString(
@@ -123,11 +127,12 @@ class SepayWebhookControllerTest {
             "123456789", null, null, content, "in",
             "", 199000L, null, null, null, null));
 
-    String sig = hmacHex(TEST_SECRET, requestBody);
+    String sig = hmacHex(TEST_SECRET, TEST_TIMESTAMP + "." + requestBody);
 
     mockMvc.perform(post("/api/public/payments/sepay/webhook")
             .contentType(MediaType.APPLICATION_JSON)
-            .header("x-signature", sig)
+            .header("x-sepay-signature", "sha256=" + sig)
+            .header("x-sepay-timestamp", TEST_TIMESTAMP)
             .content(requestBody))
         .andExpect(status().isOk())
         .andExpect(content().string("OK"));
@@ -147,11 +152,12 @@ class SepayWebhookControllerTest {
             "123456789", null, null, content, "in",
             "", 199000L, null, null, null, null));
 
-    String sig = hmacHex(TEST_SECRET, requestBody);
+    String sig = hmacHex(TEST_SECRET, TEST_TIMESTAMP + "." + requestBody);
 
     mockMvc.perform(post("/api/public/payments/sepay/webhook")
             .contentType(MediaType.APPLICATION_JSON)
-            .header("x-signature", sig)
+            .header("x-sepay-signature", "sha256=" + sig)
+            .header("x-sepay-timestamp", TEST_TIMESTAMP)
             .content(requestBody))
         .andExpect(status().isOk())
         .andExpect(content().string("OK"));
@@ -166,11 +172,12 @@ class SepayWebhookControllerTest {
             "123456789", null, null, "NO_UUID_HERE", "in",
             "", 199000L, null, null, null, null));
 
-    String sig = hmacHex(TEST_SECRET, requestBody);
+    String sig = hmacHex(TEST_SECRET, TEST_TIMESTAMP + "." + requestBody);
 
     mockMvc.perform(post("/api/public/payments/sepay/webhook")
             .contentType(MediaType.APPLICATION_JSON)
-            .header("x-signature", sig)
+            .header("x-sepay-signature", "sha256=" + sig)
+            .header("x-sepay-timestamp", TEST_TIMESTAMP)
             .content(requestBody))
         .andExpect(status().isBadRequest())
         .andExpect(content().string("Order ID not found in content"));
@@ -187,11 +194,12 @@ class SepayWebhookControllerTest {
             "123456789", null, null, content, "in",
             "", 199000L, null, null, null, null));
 
-    String sig = hmacHex(TEST_SECRET, requestBody);
+    String sig = hmacHex(TEST_SECRET, TEST_TIMESTAMP + "." + requestBody);
 
     mockMvc.perform(post("/api/public/payments/sepay/webhook")
             .contentType(MediaType.APPLICATION_JSON)
-            .header("x-signature", sig)
+            .header("x-sepay-signature", "sha256=" + sig)
+            .header("x-sepay-timestamp", TEST_TIMESTAMP)
             .content(requestBody))
         .andExpect(status().isNotFound())
         .andExpect(content().string("Order not found"));

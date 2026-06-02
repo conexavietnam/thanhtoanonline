@@ -5,7 +5,7 @@ import java.sql.Statement;
 import org.flywaydb.core.api.migration.BaseJavaMigration;
 import org.flywaydb.core.api.migration.Context;
 
-public class V42__AddSepayPaymentProvider extends BaseJavaMigration {
+public class V43__AddSepayPaymentProvider extends BaseJavaMigration {
   @Override
   public void migrate(Context context) throws Exception {
     Connection connection = context.getConnection();

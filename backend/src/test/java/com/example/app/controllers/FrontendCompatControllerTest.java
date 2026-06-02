@@ -11,6 +11,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.example.app.dto.request.CheckoutRequest;
 import com.example.app.dto.response.CheckoutResponse;
 import com.example.app.dto.response.OrderResponse;
+import com.example.app.dto.response.PaymentRequestResponse;
 import com.example.app.models.PaymentProvider;
 import com.example.app.services.BillingService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -40,6 +41,8 @@ class FrontendCompatControllerTest {
 
     when(billingService.createOrder(anyString(), any()))
         .thenReturn(orderResponse);
+    when(billingService.createPaymentRequest(anyString(), any()))
+        .thenReturn(new PaymentRequestResponse(orderId, "SEPAY", null, "Pending bank transfer"));
 
     FrontendCompatController controller = new FrontendCompatController(
         billingService, null, null);
@@ -49,7 +52,7 @@ class FrontendCompatControllerTest {
 
     CheckoutResponse response = controller.checkout(auth, request);
 
-    assertEquals("SEPAY", response.provider());
+    assertEquals("SEPAY", response.payment().provider());
     assertEquals(199000, response.payment().amount());
   }
 
@@ -64,6 +67,10 @@ class FrontendCompatControllerTest {
 
     when(billingService.createOrder(anyString(), any()))
         .thenReturn(orderResponse);
+    when(billingService.createPaymentRequest(anyString(), any()))
+        .thenReturn(new PaymentRequestResponse(orderId, "SEPAY", null, "Pending bank transfer"));
+    Authentication auth = Mockito.mock(Authentication.class);
+    when(auth.getName()).thenReturn("user@example.com");
 
     MockMvc mockMvc = MockMvcBuilders
         .standaloneSetup(new FrontendCompatController(billingService, null, null))
@@ -75,8 +82,8 @@ class FrontendCompatControllerTest {
     mockMvc.perform(post("/api/payments/checkout")
             .contentType(MediaType.APPLICATION_JSON)
             .content(body)
-            .principal(() -> "user@example.com"))
+            .principal(auth))
         .andExpect(status().isOk())
-        .andExpect(jsonPath("$.provider").value("SEPAY"));
+        .andExpect(jsonPath("$.payment.provider").value("SEPAY"));
   }
 }

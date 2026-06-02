@@ -14,7 +14,7 @@ const ThankYouPage = () => {
 
   const paymentReference = searchParams.get("ref");
   const planCode = searchParams.get("plan");
-  const orderId = searchParams.get("orderId");
+  const orderId = searchParams.get("orderId") || paymentReference;
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -72,7 +72,7 @@ const ThankYouPage = () => {
     );
   }
 
-  const isCompleted = orderStatus === "COMPLETED" || !orderId;
+  const isCompleted = orderStatus === "COMPLETED";
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-base-100 via-primary/5 to-secondary/5 flex items-center justify-center p-4">

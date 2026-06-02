@@ -9,8 +9,11 @@ import com.example.app.repositories.OrderRepository;
 import com.example.app.repositories.PaymentEventRepository;
 import com.example.app.services.BillingService;
 import com.example.app.services.EmailService;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -24,9 +27,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.util.StringUtils;
 
 @RestController
 @RequestMapping("/api/public/payments/sepay")
@@ -45,43 +49,56 @@ public class SepayWebhookController {
   @Value("${sepay.webhook-secret:}")
   private String webhookSecret;
 
-  @Value("${sepay.signature-header:x-signature}")
+  @Value("${sepay.signature-header:x-sepay-signature}")
   private String signatureHeader;
 
   @PostMapping("/webhook")
   public ResponseEntity<String> handleWebhook(
-      @RequestBody SepayWebhookRequest request,
-      @RequestHeader(value = "x-signature", required = false) String xSignature,
-      @RequestHeader(value = "signature", required = false) String signatureLegacy) {
+      @RequestBody String rawBody,
+      @RequestHeader java.util.Map<String, String> headers) {
     if (webhookSecret == null || webhookSecret.isBlank()) {
       log.error("SEPAY_WEBHOOK_SECRET not configured");
       return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Webhook not configured");
     }
 
-    String providedSig = xSignature != null ? xSignature : signatureLegacy;
+    String providedSig = resolveSignature(headers);
     if (providedSig == null || providedSig.isBlank()) {
       log.warn("SEPAY webhook missing signature header");
       return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Missing signature");
     }
 
-    String payloadRaw;
+    String timestamp = resolveTimestamp(headers);
+    if (!StringUtils.hasText(timestamp)) {
+      log.warn("SEPAY webhook missing timestamp header");
+      return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Missing timestamp");
+    }
+
+    SepayWebhookRequest request;
+    JsonNode rawPayload;
     try {
-      payloadRaw = objectMapper.writeValueAsString(request);
+      rawPayload = objectMapper.readTree(rawBody);
+      request = objectMapper.treeToValue(rawPayload, SepayWebhookRequest.class);
     } catch (Exception e) {
-      log.error("Failed to serialize request for HMAC", e);
+      log.error("Failed to parse SEPAY webhook payload", e);
       return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Invalid payload");
     }
 
-    String computedSig = hmacSha256(webhookSecret, payloadRaw);
-    if (!providedSig.equalsIgnoreCase(computedSig)) {
-      log.warn("SEPAY webhook invalid signature: provided={}, computed={}", providedSig, computedSig);
+    String signedPayload = timestamp + "." + rawBody;
+    String computedSig = "sha256=" + hmacSha256(webhookSecret, signedPayload);
+    if (!secureEquals(normalizeSignature(providedSig), computedSig)) {
+      log.warn("SEPAY webhook invalid signature");
       return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid signature");
     }
 
-    String content = request.content();
+    String content = StringUtils.hasText(request.content()) ? request.content() : request.description();
     if (content == null || content.isBlank()) {
       log.warn("SEPAY webhook empty content/description");
       return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Empty content");
+    }
+
+    if (StringUtils.hasText(request.transferType()) && !"in".equalsIgnoreCase(request.transferType().trim())) {
+      log.info("SEPAY webhook ignored non-incoming transfer type={}", request.transferType());
+      return ResponseEntity.ok("Ignored");
     }
 
     Matcher matcher = UUID_PATTERN.matcher(content);
@@ -104,14 +121,28 @@ public class SepayWebhookController {
       return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Order not found");
     }
 
+    if (request.transferAmount() != null && request.transferAmount() < order.getAmountVnd()) {
+      log.warn("SEPAY webhook amount mismatch order={} expected={} actual={}",
+          orderId, order.getAmountVnd(), request.transferAmount());
+      return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Amount mismatch");
+    }
+
     ObjectNode payload = objectMapper.createObjectNode();
+    payload.set("raw", rawPayload);
     payload.put("sepayId", request.id() != null ? request.id() : -1);
     payload.put("gateway", request.gateway());
     payload.put("transferAmount", request.transferAmount() != null ? request.transferAmount() : 0);
     payload.put("content", request.content());
+    payload.put("description", request.description());
+    payload.put("transferType", request.transferType());
     payload.put("transactionDate", request.transactionDate());
     payload.put("accountNumber", request.accountNumber());
-    payload.put("signature", providedSig);
+
+    if (request.id() != null) {
+      order.setExternalTxnId(String.valueOf(request.id()));
+    }
+    order.setExternalPayload(payload);
+    orderRepository.save(order);
 
     PaymentEvent event = new PaymentEvent();
     event.setOrder(order);
@@ -122,13 +153,22 @@ public class SepayWebhookController {
     paymentEventRepository.save(event);
 
     if (order.getStatus() == OrderStatus.PENDING) {
+      Order completedOrder;
       try {
-        billingService.completeOrder(order.getId());
+        completedOrder = billingService.completeOrder(order.getId());
         log.info("SEPAY webhook completed order: {}", orderId);
-        emailService.sendPaymentSuccessEmail(order.getUser().getEmail(), order);
       } catch (Exception e) {
         log.error("SEPAY webhook failed to complete order {}: {}", orderId, e.getMessage(), e);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Order processing failed");
+      }
+
+      try {
+        if (completedOrder == null) {
+          completedOrder = order;
+        }
+        emailService.sendPaymentSuccessEmail(completedOrder.getUser().getEmail(), completedOrder);
+      } catch (Exception e) {
+        log.error("SEPAY webhook payment email failed for order {}: {}", orderId, e.getMessage(), e);
       }
     } else {
       log.info("SEPAY webhook order {} already in status {}, skipping", orderId, order.getStatus());
@@ -137,12 +177,65 @@ public class SepayWebhookController {
     return ResponseEntity.ok("OK");
   }
 
+  private String resolveTimestamp(java.util.Map<String, String> headers) {
+    String timestamp = headerValue(headers, "x-sepay-timestamp");
+    if (StringUtils.hasText(timestamp)) {
+      return timestamp;
+    }
+    return headerValue(headers, "sepay-timestamp");
+  }
+
+  private String resolveSignature(java.util.Map<String, String> headers) {
+    if (headers == null || headers.isEmpty()) {
+      return null;
+    }
+    String configured = headerValue(headers, signatureHeader);
+    if (StringUtils.hasText(configured)) {
+      return configured;
+    }
+    String xSignature = headerValue(headers, "x-signature");
+    if (StringUtils.hasText(xSignature)) {
+      return xSignature;
+    }
+    String sepaySignature = headerValue(headers, "x-sepay-signature");
+    if (StringUtils.hasText(sepaySignature)) {
+      return sepaySignature;
+    }
+    return headerValue(headers, "signature");
+  }
+
+  private String headerValue(java.util.Map<String, String> headers, String name) {
+    if (!StringUtils.hasText(name)) {
+      return null;
+    }
+    for (java.util.Map.Entry<String, String> entry : headers.entrySet()) {
+      if (name.equalsIgnoreCase(entry.getKey())) {
+        return entry.getValue();
+      }
+    }
+    return null;
+  }
+
+  private String normalizeSignature(String signature) {
+    String cleaned = signature == null ? "" : signature.trim();
+    if (cleaned.regionMatches(true, 0, "sha256=", 0, 7)) {
+      return "sha256=" + cleaned.substring(7);
+    }
+    return "sha256=" + cleaned;
+  }
+
+  private boolean secureEquals(String a, String b) {
+    return MessageDigest.isEqual(
+        a.getBytes(StandardCharsets.UTF_8),
+        b.getBytes(StandardCharsets.UTF_8));
+  }
+
   private String hmacSha256(String secret, String data) {
     try {
       Mac mac = Mac.getInstance("HmacSHA256");
-      SecretKeySpec keySpec = new SecretKeySpec(secret.getBytes("UTF-8"), "HmacSHA256");
+      SecretKeySpec keySpec = new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256");
       mac.init(keySpec);
-      byte[] rawHmac = mac.doFinal(data.getBytes("UTF-8"));
+      byte[] rawHmac = mac.doFinal(data.getBytes(StandardCharsets.UTF_8));
       StringBuilder hex = new StringBuilder();
       for (byte b : rawHmac) {
         hex.append(String.format("%02x", b));

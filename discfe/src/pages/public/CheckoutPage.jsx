@@ -22,13 +22,19 @@ const CheckoutPage = () => {
   const submitLockRef = useRef(false)
   const pollRef = useRef(null)
 
+  const selectedPlan = useMemo(() => {
+    if (!plans.length) return null
+    const code = searchParams.get("plan")
+    return plans.find((plan) => plan.code === code) ?? plans.find((plan) => plan.highlighted) ?? plans[0]
+  }, [plans, searchParams])
+
   const pollOrderStatus = useCallback(async (orderId) => {
     try {
       const { data } = await api.get(`/users/me/orders/${orderId}/status`)
       if (data.status === "COMPLETED") {
         setPollStatus("completed")
         setTimeout(() => {
-          navigate(`/thank-you?ref=${data.paymentReference}&plan=${selectedPlan?.code}`, { replace: true })
+          navigate(`/thank-you?ref=${data.paymentReference}&orderId=${data.orderId}&plan=${selectedPlan?.code}`, { replace: true })
         }, 800)
         return true
       }
@@ -45,14 +51,14 @@ const CheckoutPage = () => {
   useEffect(() => {
     if (pollStatus === "waiting" && createdPayment) {
       pollRef.current = setInterval(async () => {
-        const done = await pollOrderStatus(createdPayment.id)
+        const done = await pollOrderStatus(createdPayment.orderId)
         if (done) {
           clearInterval(pollRef.current)
           pollRef.current = null
         }
       }, 5000)
       // Also poll immediately
-      pollOrderStatus(createdPayment.id)
+      pollOrderStatus(createdPayment.orderId)
       return () => {
         if (pollRef.current) {
           clearInterval(pollRef.current)
@@ -102,12 +108,6 @@ const CheckoutPage = () => {
       navigate(`/login?from=${returnUrl}`, { replace: true })
     }
   }, [isAuthenticated, initializing, navigate])
-
-  const selectedPlan = useMemo(() => {
-    if (!plans.length) return null
-    const code = searchParams.get("plan")
-    return plans.find((plan) => plan.code === code) ?? plans.find((plan) => plan.highlighted) ?? plans[0]
-  }, [plans, searchParams])
 
   const handleChange = (event) => {
     const { name, value } = event.target
