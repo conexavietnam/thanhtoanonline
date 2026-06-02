@@ -179,10 +179,11 @@ public class BillingService {
       throw new ApiException(HttpStatus.BAD_REQUEST, "ORDER_NOT_PENDING", "Order is not pending");
     }
 
-    String url = "https://pay.local/" + order.getProvider().name().toLowerCase(Locale.ROOT)
-        + "?orderId=" + order.getId();
-
-    return new PaymentRequestResponse(order.getId(), order.getProvider().name(), url, "Payment request created");
+    return new PaymentRequestResponse(
+        order.getId(),
+        order.getProvider().name(),
+        null,
+        "Payment request created");
   }
 
   @Transactional
