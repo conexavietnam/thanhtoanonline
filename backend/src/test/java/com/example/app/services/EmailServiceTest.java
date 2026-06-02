@@ -1,9 +1,9 @@
 package com.example.app.services;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.aryEq;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -14,6 +14,7 @@ import com.example.app.models.Result;
 import com.example.app.models.TestSession;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 
 class EmailServiceTest {
@@ -64,12 +65,14 @@ class EmailServiceTest {
 
     assertTrue(service.sendDiscReportEmail("disc@example.com", session, result, pdfBytes));
 
+    ArgumentCaptor<byte[]> attachmentCaptor = ArgumentCaptor.forClass(byte[].class);
     verify(emailSender).send(
         "disc@example.com",
         "Báo cáo DISC của bạn đã sẵn sàng",
         contains("đính kèm file PDF báo cáo"),
         anyString(),
-        aryEq(pdfBytes));
+        attachmentCaptor.capture());
+    assertArrayEquals(pdfBytes, attachmentCaptor.getValue());
   }
 
   @Test
