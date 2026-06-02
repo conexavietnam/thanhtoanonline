@@ -93,7 +93,7 @@ public class FrontendCompatController {
         new CreateOrderRequest(request.planCode(), provider, note));
 
     String paymentUrl = null;
-    if (provider != PaymentProvider.MANUAL) {
+    if (provider == PaymentProvider.VNPAY || provider == PaymentProvider.MOMO) {
       PaymentRequestResponse paymentRequest = billingService.createPaymentRequest(
           authentication.getName(),
           new CreatePaymentRequest(order.id()));

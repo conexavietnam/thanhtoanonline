@@ -145,12 +145,6 @@ const CheckoutPage = () => {
         note: form.note || null,
       })
 
-      // Check if we need to redirect to payment provider (e.g. VNPay)
-      if (data.paymentUrl) {
-        window.location.href = data.paymentUrl;
-        return;
-      }
-
       // If Bank Transfer, show QR Modal (but fail fast if bank info is missing)
       if (form.provider === "BANK_TRANSFER") {
         if (!settings?.bankId || !settings?.accountNumber) {
@@ -161,6 +155,12 @@ const CheckoutPage = () => {
         setShowQrModal(true)
         setPollStatus("waiting")
         return
+      }
+
+      // Check if we need to redirect to payment provider (e.g. VNPay)
+      if (data.paymentUrl) {
+        window.location.href = data.paymentUrl;
+        return;
       }
 
       // Success - redirect to thank you page

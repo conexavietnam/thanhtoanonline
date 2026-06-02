@@ -1,8 +1,11 @@
 package com.example.app.controllers;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -11,7 +14,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.example.app.dto.request.CheckoutRequest;
 import com.example.app.dto.response.CheckoutResponse;
 import com.example.app.dto.response.OrderResponse;
-import com.example.app.dto.response.PaymentRequestResponse;
 import com.example.app.models.PaymentProvider;
 import com.example.app.services.BillingService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -41,9 +43,6 @@ class FrontendCompatControllerTest {
 
     when(billingService.createOrder(anyString(), any()))
         .thenReturn(orderResponse);
-    when(billingService.createPaymentRequest(anyString(), any()))
-        .thenReturn(new PaymentRequestResponse(orderId, "SEPAY", null, "Pending bank transfer"));
-
     FrontendCompatController controller = new FrontendCompatController(
         billingService, null, null);
 
@@ -54,6 +53,8 @@ class FrontendCompatControllerTest {
 
     assertEquals("SEPAY", response.payment().provider());
     assertEquals(199000, response.payment().amount());
+    assertNull(response.paymentUrl());
+    verify(billingService, never()).createPaymentRequest(anyString(), any());
   }
 
   @Test
@@ -67,8 +68,6 @@ class FrontendCompatControllerTest {
 
     when(billingService.createOrder(anyString(), any()))
         .thenReturn(orderResponse);
-    when(billingService.createPaymentRequest(anyString(), any()))
-        .thenReturn(new PaymentRequestResponse(orderId, "SEPAY", null, "Pending bank transfer"));
     Authentication auth = Mockito.mock(Authentication.class);
     when(auth.getName()).thenReturn("user@example.com");
 
@@ -84,6 +83,9 @@ class FrontendCompatControllerTest {
             .content(body)
             .principal(auth))
         .andExpect(status().isOk())
-        .andExpect(jsonPath("$.payment.provider").value("SEPAY"));
+        .andExpect(jsonPath("$.payment.provider").value("SEPAY"))
+        .andExpect(jsonPath("$.paymentUrl").doesNotExist());
+
+    verify(billingService, never()).createPaymentRequest(anyString(), any());
   }
 }
