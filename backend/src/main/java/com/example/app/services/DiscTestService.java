@@ -1,0 +1,680 @@
+package com.example.app.services;
+
+import com.example.app.dto.request.DiscTestSubmitRequest;
+import com.example.app.dto.response.DiscTestHistoryItemResponse;
+import com.example.app.dto.response.DiscTestResultResponse;
+import com.example.app.dto.response.DiscTestResultResponse.CareerRecommendation;
+import com.example.app.dto.response.DiscTestResultResponse.DevelopmentPlanItem;
+import com.example.app.dto.response.DiscTestResultResponse.DimensionScore;
+import com.example.app.dto.response.DiscTestResultResponse.InsightItem;
+import com.example.app.dto.response.DiscTestResultResponse.TraitScore;
+import com.example.app.dto.response.QuestionItemResponse;
+import com.example.app.dto.response.QuestionItemResponse.QuestionOptionResponse;
+import com.example.app.models.Answer;
+import com.example.app.models.AppUser;
+import com.example.app.models.CreditTransaction;
+import com.example.app.models.CreditTxType;
+import com.example.app.models.Question;
+import com.example.app.models.QuestionOption;
+import com.example.app.models.Result;
+import com.example.app.models.SessionStatus;
+import com.example.app.models.TestMode;
+import com.example.app.models.TestSession;
+import com.example.app.repositories.AppUserRepository;
+import com.example.app.repositories.AnswerRepository;
+import com.example.app.repositories.CreditTransactionRepository;
+import com.example.app.repositories.QuestionRepository;
+import com.example.app.repositories.ResultRepository;
+import com.example.app.repositories.TestDefinitionRepository;
+import com.example.app.repositories.TestSessionRepository;
+import com.example.app.utils.ApiException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.stream.Collectors;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+@Service
+public class DiscTestService {
+  private static final List<String> FREE_CODES = List.of("DISC_FREE", "DISC");
+  private static final List<String> PAID_CODES = List.of("DISC_PAID", "DISC");
+  private static final List<String> DISC_DIMENSIONS = List.of("D", "I", "S", "C");
+  private static final List<String> BIG_FIVE_DIMENSIONS = List.of(
+      "openness",
+      "conscientiousness",
+      "extraversion",
+      "agreeableness",
+      "neuroticism");
+  private static final List<String> IKIGAI_DIMENSIONS = List.of(
+      "passion",
+      "strength",
+      "value",
+      "opportunity");
+  private static final long PAID_COST_VND = 300_000L;
+
+  private final QuestionRepository questionRepository;
+  private final TestSessionRepository testSessionRepository;
+  private final ResultRepository resultRepository;
+  private final AnswerRepository answerRepository;
+  private final TestDefinitionRepository testDefinitionRepository;
+  private final AppUserRepository appUserRepository;
+  private final CreditTransactionRepository creditTransactionRepository;
+  private final UserAccountService userAccountService;
+  private final AssessmentQuestionSelectionService assessmentQuestionSelectionService;
+  private final ObjectMapper objectMapper;
+
+  public DiscTestService(
+      QuestionRepository questionRepository,
+      TestSessionRepository testSessionRepository,
+      ResultRepository resultRepository,
+      AnswerRepository answerRepository,
+      TestDefinitionRepository testDefinitionRepository,
+      AppUserRepository appUserRepository,
+      CreditTransactionRepository creditTransactionRepository,
+      UserAccountService userAccountService,
+      AssessmentQuestionSelectionService assessmentQuestionSelectionService,
+      ObjectMapper objectMapper) {
+    this.questionRepository = questionRepository;
+    this.testSessionRepository = testSessionRepository;
+    this.resultRepository = resultRepository;
+    this.answerRepository = answerRepository;
+    this.testDefinitionRepository = testDefinitionRepository;
+    this.appUserRepository = appUserRepository;
+    this.creditTransactionRepository = creditTransactionRepository;
+    this.userAccountService = userAccountService;
+    this.assessmentQuestionSelectionService = assessmentQuestionSelectionService;
+    this.objectMapper = objectMapper;
+  }
+
+  @Transactional(readOnly = true)
+  public List<QuestionItemResponse> loadQuestions(String requestedMode) {
+    TestMode mode = resolveMode(requestedMode);
+    return resolveQuestionsForMode(mode).stream()
+        .map(this::toQuestionItem)
+        .toList();
+  }
+
+  @Transactional
+  public DiscTestResultResponse submit(DiscTestSubmitRequest request, Authentication authentication) {
+    if (request == null || request.answers() == null || request.answers().isEmpty()) {
+      throw new ApiException(HttpStatus.BAD_REQUEST, "NO_ANSWERS", "No answers submitted");
+    }
+
+    TestMode mode = resolveMode(request.testMode());
+    List<Question> selectedQuestions = resolveQuestionsForMode(mode);
+    if (selectedQuestions.isEmpty()) {
+      throw new ApiException(HttpStatus.BAD_REQUEST, "QUESTION_POOL_EMPTY", "No questions available for this test mode");
+    }
+
+    AppUser owner = mode == TestMode.PAID ? requirePaidUser(authentication) : resolveUser(authentication);
+    TestSession session = new TestSession();
+    session.setOwnerUser(owner);
+    session.setTakerUser(owner);
+    session.setTakerName(resolveTakerName(request, owner));
+    session.setTestCode(resolveSessionTestCode(mode, selectedQuestions));
+    session.setMode(mode);
+    session.setStatus(SessionStatus.IN_PROGRESS);
+    session.setCostVnd(mode == TestMode.PAID ? PAID_COST_VND : 0);
+    testSessionRepository.save(session);
+    if (mode == TestMode.PAID) {
+      consumePaidTestCredit(owner, session.getId());
+    }
+
+    Map<UUID, Question> questionById = selectedQuestions.stream()
+        .collect(Collectors.toMap(Question::getId, question -> question));
+
+    Map<String, Integer> dimensionScores = initDimensionScores();
+    Map<String, Double> traitScoreSum = new HashMap<>();
+    Map<String, Integer> traitCount = new HashMap<>();
+    List<Answer> answersToPersist = new ArrayList<>();
+
+    for (DiscTestSubmitRequest.AnswerItem item : request.answers()) {
+      Question question = questionById.get(item.questionId());
+      if (question == null) {
+        throw new ApiException(HttpStatus.BAD_REQUEST, "QUESTION_NOT_FOUND", "Question not found: " + item.questionId());
+      }
+
+      QuestionOption selectedOption = question.getOptions().stream()
+          .filter(opt -> opt.getId().equals(item.optionId()))
+          .findFirst()
+          .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "OPTION_NOT_FOUND", "Answer option not found"));
+
+      int value = selectedOption.getValue();
+      if (question.isReverseScored()) {
+        value = 6 - value;
+      }
+
+      String trait = resolveTraitKey(question, selectedOption);
+      if (trait.startsWith("DISC_")) {
+        String dimension = resolveDimensionFromTrait(trait);
+        if (!dimension.isBlank()) {
+          dimensionScores.merge(dimension, value, Integer::sum);
+        }
+      }
+      BigDecimal weighted = BigDecimal.valueOf(value).multiply(question.getWeight());
+      traitScoreSum.merge(trait, weighted.doubleValue(), Double::sum);
+      traitCount.merge(trait, 1, Integer::sum);
+
+      Answer answer = new Answer();
+      answer.setSession(session);
+      answer.setQuestion(question);
+      answer.setOption(selectedOption);
+      answer.setValue(value);
+      answersToPersist.add(answer);
+    }
+
+    answerRepository.saveAll(answersToPersist);
+
+    Map<String, Double> traitAvg = traitScoreSum.entrySet().stream()
+        .collect(Collectors.toMap(
+            Map.Entry::getKey,
+            entry -> round(entry.getValue() / traitCount.getOrDefault(entry.getKey(), 1)),
+            (a, b) -> b,
+            LinkedHashMap::new
+        ));
+
+    Map<String, Double> bigFiveScores = normalizeBigFiveScores(extractByPrefix(traitAvg, "BIG5_"));
+    Map<String, Double> ikigaiScores = normalizeIkigaiScores(extractByPrefix(traitAvg, "IKIGAI_"));
+
+    List<DimensionScore> dimensionScoreList = DISC_DIMENSIONS.stream()
+        .map(dim -> new DimensionScore(dim, dimensionScores.getOrDefault(dim, 0)))
+        .toList();
+
+    List<String> topDimensions = dimensionScoreList.stream()
+        .sorted(Comparator.comparingInt(DimensionScore::score).reversed().thenComparing(DimensionScore::dimension))
+        .limit(2)
+        .map(DimensionScore::dimension)
+        .toList();
+
+    boolean fullDetailUnlocked = mode == TestMode.PAID;
+    int previewCoverage = mode == TestMode.PAID ? 100 : 70;
+
+    ObjectNode resultJson = objectMapper.createObjectNode();
+    resultJson.put("sessionId", session.getId().toString());
+    resultJson.put("testCode", session.getTestCode());
+    resultJson.put("mode", session.getMode().name());
+    resultJson.put("fullDetailUnlocked", fullDetailUnlocked);
+    resultJson.put("previewCoveragePercentage", previewCoverage);
+
+    ArrayNode topArray = objectMapper.createArrayNode();
+    topDimensions.forEach(topArray::add);
+    resultJson.set("topDimensions", topArray);
+
+    ArrayNode scoresArray = objectMapper.createArrayNode();
+    for (DimensionScore score : dimensionScoreList) {
+      ObjectNode scoreNode = objectMapper.createObjectNode();
+      scoreNode.put("dimension", score.dimension());
+      scoreNode.put("score", score.score());
+      scoresArray.add(scoreNode);
+    }
+    resultJson.set("dimensionScores", scoresArray);
+    resultJson.set("bigFiveScores", objectMapper.valueToTree(bigFiveScores));
+    resultJson.set("ikigaiScores", objectMapper.valueToTree(ikigaiScores));
+
+    resultJson.put("insightsEnabled", mode == TestMode.PAID);
+    resultJson.put("careerRecommendationsEnabled", mode == TestMode.PAID);
+    resultJson.put("developmentPlansEnabled", mode == TestMode.PAID);
+    resultJson.set("insights", objectMapper.createArrayNode());
+    resultJson.set("careerRecommendations", objectMapper.createArrayNode());
+    resultJson.set("developmentPlans", objectMapper.createArrayNode());
+
+    Result result = new Result();
+    result.setSession(session);
+    result.setResultJson(resultJson);
+    result.setSummary("DISC profile: " + String.join("/", topDimensions));
+    resultRepository.save(result);
+
+    session.setStatus(SessionStatus.COMPLETED);
+    session.setCompletedAt(Instant.now());
+    testSessionRepository.save(session);
+
+    return toResponse(session, resultJson);
+  }
+
+  @Transactional(readOnly = true)
+  public List<DiscTestHistoryItemResponse> history(String email) {
+    AppUser owner = userAccountService.requireByEmail(email);
+    return testSessionRepository
+        .findByOwnerUserIdAndStatusOrderByCreatedAtDesc(owner.getId(), SessionStatus.COMPLETED)
+        .stream()
+        .map(session -> new DiscTestHistoryItemResponse(
+            session.getId(),
+            session.getMode().name(),
+            session.getCompletedAt(),
+            session.getTakerName()))
+        .toList();
+  }
+
+  @Transactional(readOnly = true)
+  public DiscTestResultResponse latest(String email, boolean preferDetailed) {
+    AppUser owner = userAccountService.requireByEmail(email);
+    List<TestSession> sessions = testSessionRepository
+        .findByOwnerUserIdAndStatusOrderByCreatedAtDesc(owner.getId(), SessionStatus.COMPLETED);
+
+    DiscTestResultResponse fallback = null;
+    for (TestSession session : sessions) {
+      DiscTestResultResponse response = resultRepository.findBySessionId(session.getId())
+          .map(result -> toResponse(session, result.getResultJson()))
+          .orElse(null);
+      if (response == null) {
+        continue;
+      }
+      if (fallback == null) {
+        fallback = response;
+      }
+      if (!preferDetailed || response.fullDetailUnlocked() || hasMeaningfulTraitData(response)) {
+        return response;
+      }
+    }
+
+    if (fallback != null) {
+      return fallback;
+    }
+
+    throw new ApiException(HttpStatus.NOT_FOUND, "RESULT_NOT_FOUND", "No DISC result found");
+  }
+
+  private DiscTestResultResponse toResponse(TestSession session, JsonNode json) {
+    List<DimensionScore> dimensionScores = new ArrayList<>();
+    if (json != null && json.get("dimensionScores") != null && json.get("dimensionScores").isArray()) {
+      for (JsonNode node : json.get("dimensionScores")) {
+        String dim = node.path("dimension").asText(null);
+        int score = node.path("score").asInt(0);
+        if (dim != null && !dim.isBlank()) {
+          dimensionScores.add(new DimensionScore(dim, score));
+        }
+      }
+    }
+    if (dimensionScores.isEmpty()) {
+      dimensionScores = DISC_DIMENSIONS.stream().map(dim -> new DimensionScore(dim, 0)).toList();
+    }
+
+    List<String> topDimensions = new ArrayList<>();
+    if (json != null && json.get("topDimensions") != null && json.get("topDimensions").isArray()) {
+      for (JsonNode node : json.get("topDimensions")) {
+        topDimensions.add(node.asText());
+      }
+    }
+    if (topDimensions.isEmpty()) {
+      topDimensions = dimensionScores.stream()
+          .sorted(Comparator.comparingInt(DimensionScore::score).reversed().thenComparing(DimensionScore::dimension))
+          .limit(2)
+          .map(DimensionScore::dimension)
+          .toList();
+    }
+
+    boolean fullDetailUnlocked = json != null && json.path("fullDetailUnlocked").asBoolean(false);
+    int previewCoverage = json != null ? json.path("previewCoveragePercentage").asInt(70) : 70;
+    boolean insightsEnabled = json == null || json.path("insightsEnabled").asBoolean(true);
+    boolean careerEnabled = json == null || json.path("careerRecommendationsEnabled").asBoolean(true);
+    boolean plansEnabled = json == null || json.path("developmentPlansEnabled").asBoolean(true);
+
+    List<TraitScore> bigFiveScores = parseTraitScores(json, "bigFiveScores", BIG_FIVE_DIMENSIONS);
+    List<TraitScore> ikigaiScores = parseTraitScores(json, "ikigaiScores", IKIGAI_DIMENSIONS);
+    List<InsightItem> insights = parseInsights(json);
+    List<CareerRecommendation> careers = parseCareers(json);
+    List<DevelopmentPlanItem> plans = parsePlans(json);
+
+    return new DiscTestResultResponse(
+        session.getId(),
+        session.getMode() == null ? TestMode.PAID.name() : session.getMode().name(),
+        topDimensions,
+        dimensionScores,
+        bigFiveScores,
+        ikigaiScores,
+        fullDetailUnlocked,
+        previewCoverage,
+        insightsEnabled,
+        careerEnabled,
+        plansEnabled,
+        insights,
+        careers,
+        plans
+    );
+  }
+
+  private List<InsightItem> parseInsights(JsonNode json) {
+    if (json == null || json.get("insights") == null || !json.get("insights").isArray()) {
+      return List.of();
+    }
+    List<InsightItem> items = new ArrayList<>();
+    for (JsonNode node : json.get("insights")) {
+      items.add(new InsightItem(
+          node.path("dimension").asText(""),
+          node.path("summary").asText(""),
+          node.path("keyBehaviors").asText(""),
+          node.path("strengths").asText(""),
+          node.path("weaknesses").asText("")
+      ));
+    }
+    return items;
+  }
+
+  private List<CareerRecommendation> parseCareers(JsonNode json) {
+    if (json == null || json.get("careerRecommendations") == null || !json.get("careerRecommendations").isArray()) {
+      return List.of();
+    }
+    List<CareerRecommendation> items = new ArrayList<>();
+    for (JsonNode node : json.get("careerRecommendations")) {
+      items.add(new CareerRecommendation(
+          node.path("jobTitle").asText(""),
+          node.path("summary").asText(""),
+          node.path("matchLevel").asInt(0),
+          node.path("skills").asText(""),
+          node.path("learningResources").asText("")
+      ));
+    }
+    return items;
+  }
+
+  private List<DevelopmentPlanItem> parsePlans(JsonNode json) {
+    if (json == null || json.get("developmentPlans") == null || !json.get("developmentPlans").isArray()) {
+      return List.of();
+    }
+    List<DevelopmentPlanItem> items = new ArrayList<>();
+    for (JsonNode node : json.get("developmentPlans")) {
+      items.add(new DevelopmentPlanItem(
+          node.path("title").asText(""),
+          node.path("description").asText(""),
+          node.path("timeframe").asText(""),
+          node.path("actions").asText("")
+      ));
+    }
+    return items;
+  }
+
+  private List<TraitScore> parseTraitScores(JsonNode json, String fieldName, List<String> preferredOrder) {
+    if (json == null) {
+      return List.of();
+    }
+
+    JsonNode node = json.get(fieldName);
+    if (node == null || node.isNull()) {
+      return List.of();
+    }
+
+    if (node.isArray()) {
+      List<TraitScore> items = new ArrayList<>();
+      for (JsonNode item : node) {
+        String dimension = item.path("dimension").asText(item.path("trait").asText(item.path("name").asText("")));
+        if (dimension == null || dimension.isBlank()) {
+          continue;
+        }
+        double score = item.path("score").asDouble(item.path("value").asDouble(0d));
+        items.add(new TraitScore(dimension, score));
+      }
+      return items;
+    }
+
+    if (node.isObject()) {
+      List<TraitScore> items = new ArrayList<>();
+      for (String dimension : preferredOrder) {
+        JsonNode valueNode = node.get(dimension);
+        if (valueNode != null && valueNode.isNumber()) {
+          items.add(new TraitScore(dimension, valueNode.asDouble()));
+        }
+      }
+      node.fieldNames().forEachRemaining(field -> {
+        boolean alreadyIncluded = items.stream().anyMatch(item -> item.dimension().equals(field));
+        JsonNode valueNode = node.get(field);
+        if (!alreadyIncluded && valueNode != null && valueNode.isNumber()) {
+          items.add(new TraitScore(field, valueNode.asDouble()));
+        }
+      });
+      return items;
+    }
+
+    return List.of();
+  }
+
+  private boolean hasMeaningfulTraitData(DiscTestResultResponse response) {
+    return hasMeaningfulTraitScores(response.bigFiveScores()) || hasMeaningfulTraitScores(response.ikigaiScores());
+  }
+
+  private boolean hasMeaningfulTraitScores(List<TraitScore> scores) {
+    return scores != null && scores.stream().anyMatch(score ->
+        score != null
+            && score.dimension() != null
+            && !score.dimension().isBlank()
+            && Double.isFinite(score.score()));
+  }
+
+  private Map<String, Integer> initDimensionScores() {
+    Map<String, Integer> scores = new LinkedHashMap<>();
+    for (String dim : DISC_DIMENSIONS) {
+      scores.put(dim, 0);
+    }
+    return scores;
+  }
+
+  private List<Question> resolveQuestionsForMode(TestMode mode) {
+    List<String> sourceCodes = resolveQuestionSourceCodes(mode);
+    return assessmentQuestionSelectionService.selectQuestions(sourceCodes, mode);
+  }
+
+  private List<String> resolveQuestionSourceCodes(TestMode mode) {
+    String discCode = resolveAvailableTestCode(mode == TestMode.PAID
+        ? List.of("DISC_PAID", "DISC", "DISC_FREE")
+        : FREE_CODES);
+
+    List<String> codes = new ArrayList<>();
+    if (discCode != null && questionRepository.countByTestCode(discCode) > 0) {
+      codes.add(discCode);
+    }
+
+    if (questionRepository.countByTestCode("BIG_FIVE") > 0) {
+      codes.add("BIG_FIVE");
+    }
+    if (questionRepository.countByTestCode("IKIGAI") > 0) {
+      codes.add("IKIGAI");
+    }
+
+    return codes;
+  }
+
+  private String resolveSessionTestCode(TestMode mode, List<Question> selectedQuestions) {
+    if (selectedQuestions == null || selectedQuestions.isEmpty()) {
+      return mode == TestMode.PAID ? "DISC" : "DISC_FREE";
+    }
+    return selectedQuestions.stream()
+        .map(Question::getTestCode)
+        .filter(code -> code != null && code.toUpperCase(Locale.ROOT).startsWith("DISC"))
+        .findFirst()
+        .orElse(selectedQuestions.get(0).getTestCode());
+  }
+
+  private Map<UUID, Question> loadQuestionsById(Set<UUID> ids) {
+    List<Question> questions = questionRepository.findAllById(ids);
+    if (questions.isEmpty()) {
+      throw new ApiException(HttpStatus.BAD_REQUEST, "QUESTION_NOT_FOUND", "Question not found");
+    }
+    Map<UUID, Question> map = new HashMap<>();
+    for (Question question : questions) {
+      map.put(question.getId(), question);
+    }
+    return map;
+  }
+
+  private Map<String, Double> extractByPrefix(Map<String, Double> source, String prefix) {
+    return source.entrySet().stream()
+        .filter(entry -> entry.getKey().startsWith(prefix))
+        .collect(Collectors.toMap(
+            entry -> entry.getKey().substring(prefix.length()),
+            Map.Entry::getValue,
+            (a, b) -> b,
+            LinkedHashMap::new
+        ));
+  }
+
+  private Map<String, Double> normalizeBigFiveScores(Map<String, Double> scores) {
+    LinkedHashMap<String, Double> normalized = new LinkedHashMap<>();
+    normalized.put("openness", firstScore(scores, "O", "OPENNESS"));
+    normalized.put("conscientiousness", firstScore(scores, "C", "CONSCIENTIOUSNESS"));
+    normalized.put("extraversion", firstScore(scores, "E", "EXTRAVERSION"));
+    normalized.put("agreeableness", firstScore(scores, "A", "AGREEABLENESS"));
+    normalized.put("neuroticism", firstScore(scores, "N", "NEUROTICISM"));
+    return normalized;
+  }
+
+  private Map<String, Double> normalizeIkigaiScores(Map<String, Double> scores) {
+    LinkedHashMap<String, Double> normalized = new LinkedHashMap<>();
+    normalized.put("passion", firstScore(scores, "LOVE", "PASSION"));
+    normalized.put("strength", firstScore(scores, "SKILL", "STRENGTH"));
+    normalized.put("value", firstScore(scores, "NEED", "VALUE"));
+    normalized.put("opportunity", firstScore(scores, "PAID", "OPPORTUNITY"));
+    return normalized;
+  }
+
+  private Double firstScore(Map<String, Double> scores, String... keys) {
+    if (scores == null || scores.isEmpty()) {
+      return null;
+    }
+    for (String key : keys) {
+      Double value = scores.get(key);
+      if (value != null) {
+        return value;
+      }
+    }
+    return null;
+  }
+
+  private double round(double value) {
+    return Math.round(value * 100.0d) / 100.0d;
+  }
+
+  private String resolveTraitKey(Question question, QuestionOption option) {
+    if (option != null) {
+      if (option.getTraitOverride() != null && !option.getTraitOverride().isBlank()) {
+        return option.getTraitOverride().trim().toUpperCase(Locale.ROOT);
+      }
+      if (option.getDiscDimension() != null && question.getTestCode().toUpperCase(Locale.ROOT).startsWith("DISC")) {
+        return "DISC_" + option.getDiscDimension().trim().toUpperCase(Locale.ROOT);
+      }
+    }
+    return question.getTraitKey() == null ? "" : question.getTraitKey().trim().toUpperCase(Locale.ROOT);
+  }
+
+  private String resolveDimensionFromTrait(String trait) {
+    if (trait == null || trait.isBlank()) {
+      return "";
+    }
+    if (trait.startsWith("DISC_") && trait.length() >= 6) {
+      String dimension = String.valueOf(trait.charAt(5)).toUpperCase(Locale.ROOT);
+      return DISC_DIMENSIONS.contains(dimension) ? dimension : "";
+    }
+    if (trait.length() == 1) {
+      String dimension = trait.toUpperCase(Locale.ROOT);
+      return DISC_DIMENSIONS.contains(dimension) ? dimension : "";
+    }
+    return "";
+  }
+
+  private QuestionItemResponse toQuestionItem(Question question) {
+    List<QuestionOptionResponse> options = question.getOptions().stream()
+        .sorted(Comparator.comparingInt(QuestionOption::getOrderIndex).thenComparing(QuestionOption::getId))
+        .map(opt -> new QuestionOptionResponse(
+            opt.getId(),
+            opt.getLabel(),
+            opt.getValue(),
+            opt.getDiscDimension(),
+            opt.getTraitOverride(),
+            opt.getOrderIndex()))
+        .toList();
+
+    UUID categoryId = question.getCategory() == null ? null : question.getCategory().getId();
+    return new QuestionItemResponse(
+        question.getId(),
+        categoryId,
+        question.getContent(),
+        question.getTraitKey(),
+        question.getOrderIndex(),
+        options);
+  }
+
+  private String resolveTakerName(DiscTestSubmitRequest request, AppUser owner) {
+    if (request != null && request.testTakerName() != null && !request.testTakerName().isBlank()) {
+      return request.testTakerName().trim();
+    }
+    if (owner != null && owner.getFullName() != null && !owner.getFullName().isBlank()) {
+      return owner.getFullName();
+    }
+    return "Khách";
+  }
+
+  private TestMode resolveMode(String raw) {
+    if (raw != null && "PAID".equalsIgnoreCase(raw.trim())) {
+      return TestMode.PAID;
+    }
+    return TestMode.FREE;
+  }
+
+  private String resolveAvailableTestCode(List<String> codesByPriority) {
+    for (String code : codesByPriority) {
+      if (questionRepository.countByTestCode(code) > 0) {
+        return code;
+      }
+    }
+    return codesByPriority.stream()
+        .filter(code -> testDefinitionRepository.findByCode(code).isPresent())
+        .findFirst()
+        .orElse(null);
+  }
+
+  private AppUser resolveUser(Authentication authentication) {
+    if (authentication == null || !authentication.isAuthenticated() || authentication instanceof AnonymousAuthenticationToken) {
+      return null;
+    }
+    return userAccountService.requireByEmail(authentication.getName());
+  }
+
+  private AppUser requirePaidUser(Authentication authentication) {
+    AppUser owner = resolveUser(authentication);
+    if (owner == null) {
+      throw new ApiException(HttpStatus.UNAUTHORIZED, "LOGIN_REQUIRED", "Please sign in to start the paid DISC test");
+    }
+    if (owner.getPdfCredits() <= 0) {
+      throw new ApiException(HttpStatus.FORBIDDEN, "PAID_ACCESS_REQUIRED", "Paid DISC test requires an active paid package");
+    }
+    return owner;
+  }
+
+  private void consumePaidTestCredit(AppUser owner, UUID sessionId) {
+    if (owner == null || sessionId == null) {
+      throw new ApiException(HttpStatus.BAD_REQUEST, "PAID_ACCESS_REQUIRED", "Paid DISC test requires an active paid package");
+    }
+
+    if (owner.getPdfCredits() <= 0) {
+      throw new ApiException(HttpStatus.FORBIDDEN, "PAID_ACCESS_REQUIRED", "Paid DISC test requires an active paid package");
+    }
+
+    owner.setPdfCredits(owner.getPdfCredits() - 1);
+    appUserRepository.save(owner);
+
+    CreditTransaction tx = new CreditTransaction();
+    tx.setUser(owner);
+    tx.setType(CreditTxType.EXPORT_DEDUCT);
+    tx.setDelta(-1);
+    tx.setCreditsAfter(owner.getPdfCredits());
+    tx.setRefType("DISC_TEST");
+    tx.setRefId(sessionId);
+    tx.setNote("Paid DISC test");
+    // Quốc Trí: consume one credit when a paid DISC session is submitted so one credit cannot unlock unlimited paid tests.
+    creditTransactionRepository.save(tx);
+  }
+}

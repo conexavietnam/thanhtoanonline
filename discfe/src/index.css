@@ -1,0 +1,101 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+@import "tailwindcss";
+@plugin "daisyui";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", "Inter", sans-serif;
+}
+
+/* Custom Utilities with Dark Mode Support */
+@layer utilities {
+  .glass-effect {
+    @apply bg-white/90 backdrop-blur-xl border border-base-200 shadow-xl text-base-content;
+  }
+
+  :root[data-theme="dark"] .glass-effect {
+    @apply bg-base-100/90 border-white/10;
+  }
+
+  .glass-card {
+    @apply bg-white shadow-sm border border-base-200 hover:shadow-md hover:border-primary/20 transition-all duration-300 text-base-content;
+  }
+
+  :root[data-theme="dark"] .glass-card {
+    @apply bg-base-100/50 border-white/10 hover:bg-base-100 hover:border-primary/40;
+  }
+
+  .text-gradient {
+    @apply bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent;
+  }
+
+  .text-shadow-sm {
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  }
+}
+
+:root {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  scroll-behavior: smooth;
+
+  /* Light Mode Colors (Default) using manual overrides for contrast */
+  --color-base-100: #ffffff;
+  /* White */
+  --color-base-200: #e2e8f0;
+  /* Slate-200 */
+  --color-base-300: #cbd5e1;
+  /* Slate-300 */
+  --color-base-content: #0f172a;
+  /* Slate-900 (High contrast) */
+
+  --color-primary: #7c3aed;
+  /* Violet-600 */
+  --color-primary-content: #ffffff;
+
+  --color-secondary: #c026d3;
+  /* Fuchsia-600 */
+  --color-secondary-content: #ffffff;
+}
+
+:root[data-theme="dark"] {
+  /* Dark Mode Overrides */
+  --color-base-100: #1e293b;
+  /* Slate-800 */
+  --color-base-200: #0f172a;
+  /* Slate-900 */
+  --color-base-300: #020617;
+  /* Slate-950 */
+  --color-base-content: #f8fafc;
+  /* Slate-50 */
+}
+
+body {
+  background-color: #f1f5f9;
+  /* Slate-100 */
+  color: var(--color-base-content);
+  background-image:
+    radial-gradient(circle at 10% 20%, rgba(139, 92, 246, 0.05) 0%, transparent 20%),
+    radial-gradient(circle at 90% 80%, rgba(217, 70, 239, 0.05) 0%, transparent 20%);
+  background-attachment: fixed;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Dark Mode Body Background */
+:root[data-theme="dark"] body {
+  background-color: #0f172a;
+  /* Slate-900 */
+  background-image:
+    radial-gradient(circle at 10% 20%, rgba(139, 92, 246, 0.15) 0%, transparent 20%),
+    radial-gradient(circle at 90% 80%, rgba(217, 70, 239, 0.15) 0%, transparent 20%);
+}
+
+/* Hide number input spinners where not desired */
+.no-spinner::-webkit-outer-spin-button,
+.no-spinner::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.no-spinner {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}

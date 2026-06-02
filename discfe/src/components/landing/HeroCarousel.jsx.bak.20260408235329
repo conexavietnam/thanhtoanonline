@@ -1,0 +1,78 @@
+import { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { buildAssetUrl } from "../../lib/api.js";
+
+const HeroCarousel = ({ slides }) => {
+    const [currentSlide, setCurrentSlide] = useState(0);
+
+    useEffect(() => {
+        if (!slides || slides.length <= 1) return;
+        const timer = setInterval(() => {
+            setCurrentSlide((prev) => (prev + 1) % slides.length);
+        }, 5000);
+        return () => clearInterval(timer);
+    }, [slides]);
+
+    if (!slides || slides.length === 0) return null;
+
+    const currentSlideData = slides[currentSlide];
+    const slideImage = (
+        <img
+            src={buildAssetUrl(currentSlideData.imageUrl)}
+            alt={currentSlideData.altText || currentSlideData.title || "Slide"}
+            className="w-full h-full object-cover rounded-2xl shadow-2xl"
+        />
+    );
+
+    return (
+        <section className="relative h-[600px] flex items-center justify-center overflow-hidden bg-base-100">
+            {/* Background Blobs (Static) */}
+            <div className="absolute top-0 -left-40 w-96 h-96 bg-primary/20 rounded-full mix-blend-multiply filter blur-3xl opacity-70 animate-blob"></div>
+            <div className="absolute top-0 -right-40 w-96 h-96 bg-secondary/20 rounded-full mix-blend-multiply filter blur-3xl opacity-70 animate-blob animation-delay-2000"></div>
+            <div className="absolute -bottom-40 left-20 w-96 h-96 bg-accent/20 rounded-full mix-blend-multiply filter blur-3xl opacity-70 animate-blob animation-delay-4000"></div>
+
+            <AnimatePresence mode="wait">
+                <motion.div
+                    key={currentSlide}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.5 }}
+                    className="container mx-auto px-4 z-10 text-center relative h-full flex items-center justify-center"
+                >
+                    {/* Image Only */}
+                    {currentSlideData?.imageUrl && (
+                        <div className="w-full h-full flex items-center justify-center">
+                            {currentSlideData.link ? (
+                                <a
+                                    href={currentSlideData.link}
+                                    className="block w-full h-full"
+                                    target="_blank"
+                                    rel="noreferrer"
+                                >
+                                    {slideImage}
+                                </a>
+                            ) : slideImage}
+                        </div>
+                    )}
+                </motion.div>
+            </AnimatePresence>
+
+            {/* Navigation Dots */}
+            {slides.length > 1 && (
+                <div className="absolute bottom-10 left-1/2 -translate-x-1/2 flex gap-2 z-20">
+                    {slides.map((_, index) => (
+                        <button
+                            key={index}
+                            onClick={() => setCurrentSlide(index)}
+                            className={`w-3 h-3 rounded-full transition-all ${currentSlide === index ? "bg-primary w-8" : "bg-base-300 hover:bg-primary/50"
+                                }`}
+                        />
+                    ))}
+                </div>
+            )}
+        </section>
+    );
+};
+
+export default HeroCarousel;

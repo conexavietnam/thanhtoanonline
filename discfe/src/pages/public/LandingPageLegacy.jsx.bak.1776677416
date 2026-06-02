@@ -1,0 +1,68 @@
+import { Link } from "react-router";
+import { useSettings } from "../../context/SettingsContext";
+import HeroSection from "../../components/landing/HeroSection";
+import HeroCarousel from "../../components/landing/HeroCarousel";
+import FeaturesSection from "../../components/landing/FeaturesSection";
+import TestimonialsSection from "../../components/landing/TestimonialsSection";
+
+const LandingPage = () => {
+  const { settings } = useSettings();
+  const landingConfig = settings?.landingPageConfig || {};
+  const slidesToRender = Array.isArray(settings?.homepageSlides)
+    ? settings.homepageSlides.filter((slide) => slide?.imageUrl)
+    : [];
+  const ctaConfig = landingConfig.cta || {};
+  const ctaTitle = ctaConfig.title || "Sẵn sàng khám phá bản thân?";
+  const ctaSubtitle = ctaConfig.subtitle || `Tham gia cùng hơn 50,000 người đã tìm thấy định hướng sự nghiệp đúng đắn nhờ ${settings?.siteName || "DISCWAKE"}.`;
+  const primaryText = ctaConfig.primaryText || "Làm bài Test ngay";
+  const secondaryText = ctaConfig.secondaryText || "Đăng ký tài khoản";
+
+  if (settings?.customHomepageHtml) {
+    return (
+      <div
+        dangerouslySetInnerHTML={{ __html: settings.customHomepageHtml }}
+        className="min-h-screen"
+      />
+    );
+  }
+  return (
+    <div className="min-h-screen bg-base-50">
+      {slidesToRender.length > 0 ? (
+        <HeroCarousel slides={slidesToRender} />
+      ) : (
+        <HeroSection config={landingConfig.hero} />
+      )}
+
+      <FeaturesSection config={landingConfig.features} />
+
+      <TestimonialsSection config={landingConfig.testimonials} />
+
+      {/* CTA Section */}
+      <section className="py-20 px-4">
+        <div className="container mx-auto">
+          <div className="bg-gradient-to-r from-primary to-secondary rounded-3xl p-12 text-center text-white shadow-2xl relative overflow-hidden">
+            {/* Background Pattern */}
+            <div className="absolute inset-0 opacity-10 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]"></div>
+
+            <div className="relative z-10 max-w-2xl mx-auto space-y-6">
+              <h2 className="text-3xl md:text-5xl font-bold">{ctaTitle}</h2>
+              <p className="text-lg opacity-90">
+                {ctaSubtitle}
+              </p>
+              <div className="flex flex-wrap justify-center gap-4 pt-4">
+                <a href="#lam-bai-test" className="btn btn-lg bg-white text-primary border-none hover:bg-white/90 shadow-lg">
+                  {primaryText}
+                </a>
+                <Link to="/register" className="btn btn-lg btn-outline text-white border-white hover:bg-white/10 hover:border-white">
+                  {secondaryText}
+                </Link>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+};
+
+export default LandingPage;

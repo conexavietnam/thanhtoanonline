@@ -1,0 +1,334 @@
+import React, { useEffect, useState } from "react";
+import HeroSection from "../../../../components/landing/HeroSection.jsx";
+import FeaturesSection from "../../../../components/landing/FeaturesSection.jsx";
+import TestimonialsSection from "../../../../components/landing/TestimonialsSection.jsx";
+
+const LandingCtaPreview = ({ config, siteName }) => {
+    const title = config?.title || "Sẵn sàng khám phá bản thân?";
+    const subtitle = config?.subtitle || `Tham gia cùng hơn 50,000 người đã tìm thấy định hướng sự nghiệp đúng đắn nhờ ${siteName || "DISCWAKE"}.`;
+    const primaryText = config?.primaryText || "Làm bài Test";
+    const secondaryText = config?.secondaryText || "Đăng ký tài khoản";
+
+    return (
+        <section className="py-20 px-4">
+            <div className="container mx-auto">
+                <div className="bg-gradient-to-r from-primary to-secondary rounded-3xl p-12 text-center text-white shadow-2xl relative overflow-hidden">
+                    <div className="absolute inset-0 opacity-10 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]"></div>
+                    <div className="relative z-10 max-w-2xl mx-auto space-y-6">
+                        <h2 className="text-3xl md:text-5xl font-bold">{title}</h2>
+                        <p className="text-lg opacity-90">{subtitle}</p>
+                        <div className="flex flex-wrap justify-center gap-4 pt-4">
+                            <button type="button" className="btn btn-lg bg-white text-primary border-none shadow-lg pointer-events-none">
+                                {primaryText}
+                            </button>
+                            <button type="button" className="btn btn-lg btn-outline text-white border-white pointer-events-none">
+                                {secondaryText}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    );
+};
+
+const LandingPageEditor = ({ config, onUpdate, onSave, onClose, loading, siteName }) => {
+    const [localConfig, setLocalConfig] = useState(config || {});
+    const [activeSection, setActiveSection] = useState("hero");
+
+    useEffect(() => {
+        setLocalConfig(config || {});
+    }, [config]);
+
+    const handleChange = (section, field, value) => {
+        const updated = {
+            ...localConfig,
+            [section]: {
+                ...(localConfig[section] || {}),
+                [field]: value,
+            },
+        };
+        setLocalConfig(updated);
+        if (onUpdate) onUpdate({ landingPageConfig: updated });
+    };
+
+    const handleSave = () => {
+        if (onSave) onSave({ landingPageConfig: localConfig });
+    };
+
+    const sections = [
+        { id: "hero", label: "Hero mặc định" },
+        { id: "features", label: "Khối tính năng" },
+        { id: "testimonials", label: "Đánh giá" },
+        { id: "cta", label: "Khối CTA" },
+    ];
+
+    const scrollToSection = (id) => {
+        const element = document.getElementById(`preview-${id}`);
+        if (element) {
+            element.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+    };
+
+    const handleSectionClick = (id) => {
+        setActiveSection(id);
+        scrollToSection(id);
+    };
+
+    return (
+        <div className="flex flex-col bg-base-100 rounded-none h-full w-full">
+            <div className="flex justify-between items-center p-4 border-b bg-base-100 shadow-sm z-10">
+                <div className="flex items-center gap-4">
+                    {onClose && (
+                        <button type="button" onClick={onClose} className="btn btn-sm btn-circle btn-ghost">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                        </button>
+                    )}
+                    <div>
+                        <h2 className="text-xl font-bold">Cấu hình Landing Page</h2>
+                        <p className="text-sm text-base-content/70">Chỉnh đúng các section đang được dùng ở trang chủ hiện tại.</p>
+                    </div>
+                </div>
+                <button type="button" className="btn btn-sm btn-primary" onClick={handleSave} disabled={loading}>
+                    <i className="ri-save-line mr-2"></i> Save
+                </button>
+            </div>
+
+            <div className="flex-1 flex overflow-hidden">
+                <div className="w-[460px] flex flex-col border-r border-base-300 bg-base-50 shrink-0">
+                    <div className="p-4 border-b border-base-200 bg-base-100 text-sm text-base-content/70 space-y-2">
+                        <p>`Hero mặc định` chỉ hiển thị khi chưa có slideshow.</p>
+                        <p>`Header/Footer` chỉnh ở tab `Giao diện` và `Liên hệ & Footer`.</p>
+                        <p>`Slideshow` được quản lý riêng ở tab `Slideshow`.</p>
+                    </div>
+
+                    <div className="flex flex-1 overflow-hidden">
+                        <div className="w-40 bg-base-100 border-r border-base-200 overflow-y-auto custom-scrollbar">
+                            <ul className="menu w-full p-2 gap-1 text-xs">
+                                {sections.map((section) => (
+                                    <li key={section.id}>
+                                        <button
+                                            type="button"
+                                            className={activeSection === section.id ? "active font-bold bg-primary text-white" : ""}
+                                            onClick={() => handleSectionClick(section.id)}
+                                        >
+                                            {section.label}
+                                        </button>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar bg-base-50">
+                            {activeSection === "hero" && (
+                                <div className="space-y-4 animate-fade-in">
+                                    <h3 className="text-sm font-bold border-b pb-2 text-primary">Hero mặc định</h3>
+                                    <div className="form-control w-full">
+                                        <label className="label text-xs font-bold">Badge</label>
+                                        <input
+                                            type="text"
+                                            className="input input-bordered input-sm"
+                                            value={localConfig.hero?.badgeText || ""}
+                                            onChange={(e) => handleChange("hero", "badgeText", e.target.value)}
+                                            placeholder="DISC SaaS Platform #1 Việt Nam"
+                                        />
+                                    </div>
+                                    <div className="form-control w-full">
+                                        <label className="label text-xs font-bold">Tiêu đề dòng 1</label>
+                                        <input
+                                            type="text"
+                                            className="input input-bordered input-sm"
+                                            value={localConfig.hero?.title || ""}
+                                            onChange={(e) => handleChange("hero", "title", e.target.value)}
+                                            placeholder="Thấu hiểu bản thân"
+                                        />
+                                    </div>
+                                    <div className="form-control w-full">
+                                        <label className="label text-xs font-bold">Tiêu đề highlight</label>
+                                        <input
+                                            type="text"
+                                            className="input input-bordered input-sm"
+                                            value={localConfig.hero?.highlightedText || ""}
+                                            onChange={(e) => handleChange("hero", "highlightedText", e.target.value)}
+                                            placeholder="Định hướng tương lai"
+                                        />
+                                    </div>
+                                    <div className="form-control w-full">
+                                        <label className="label text-xs font-bold">Mô tả</label>
+                                        <textarea
+                                            className="textarea textarea-bordered h-24 text-sm"
+                                            value={localConfig.hero?.description || ""}
+                                            onChange={(e) => handleChange("hero", "description", e.target.value)}
+                                            placeholder="Khám phá tiềm năng của bạn..."
+                                        />
+                                    </div>
+                                    <div className="grid grid-cols-1 gap-4">
+                                        <div className="form-control w-full">
+                                            <label className="label text-xs font-bold">Nút chính</label>
+                                            <input
+                                                type="text"
+                                                className="input input-bordered input-sm"
+                                                value={localConfig.hero?.primaryCtaText || ""}
+                                                onChange={(e) => handleChange("hero", "primaryCtaText", e.target.value)}
+                                                placeholder="Chọn gói DISC"
+                                            />
+                                        </div>
+                                        <div className="form-control w-full">
+                                            <label className="label text-xs font-bold">Nút phụ</label>
+                                            <input
+                                                type="text"
+                                                className="input input-bordered input-sm"
+                                                value={localConfig.hero?.secondaryCtaText || ""}
+                                                onChange={(e) => handleChange("hero", "secondaryCtaText", e.target.value)}
+                                                placeholder="Xem các gói dịch vụ"
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {activeSection === "features" && (
+                                <div className="space-y-4 animate-fade-in">
+                                    <h3 className="text-sm font-bold border-b pb-2 text-primary">Khối tính năng</h3>
+                                    <div className="form-control w-full">
+                                        <label className="label text-xs font-bold">Tiền tố tiêu đề</label>
+                                        <input
+                                            type="text"
+                                            className="input input-bordered input-sm"
+                                            value={localConfig.features?.title || ""}
+                                            onChange={(e) => handleChange("features", "title", e.target.value)}
+                                            placeholder="Tại sao chọn"
+                                        />
+                                    </div>
+                                    <div className="form-control w-full">
+                                        <label className="label text-xs font-bold">Phần highlight</label>
+                                        <input
+                                            type="text"
+                                            className="input input-bordered input-sm"
+                                            value={localConfig.features?.highlightedText || ""}
+                                            onChange={(e) => handleChange("features", "highlightedText", e.target.value)}
+                                            placeholder="DISCWAKE?"
+                                        />
+                                    </div>
+                                    <div className="form-control w-full">
+                                        <label className="label text-xs font-bold">Mô tả</label>
+                                        <textarea
+                                            className="textarea textarea-bordered h-24 text-sm"
+                                            value={localConfig.features?.subtitle || ""}
+                                            onChange={(e) => handleChange("features", "subtitle", e.target.value)}
+                                            placeholder="Hệ thống phân tích tính cách toàn diện..."
+                                        />
+                                    </div>
+                                    <div className="alert alert-info text-xs p-3">
+                                        <span>Danh sách feature card đang để cố định trong code, editor này chỉ chỉnh tiêu đề và mô tả phần khối.</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            {activeSection === "testimonials" && (
+                                <div className="space-y-4 animate-fade-in">
+                                    <h3 className="text-sm font-bold border-b pb-2 text-primary">Khối đánh giá</h3>
+                                    <div className="form-control w-full">
+                                        <label className="label text-xs font-bold">Tiêu đề</label>
+                                        <input
+                                            type="text"
+                                            className="input input-bordered input-sm"
+                                            value={localConfig.testimonials?.title || ""}
+                                            onChange={(e) => handleChange("testimonials", "title", e.target.value)}
+                                            placeholder="Phụ huynh nhận xét gì về phần mềm?"
+                                        />
+                                    </div>
+                                    <div className="form-control w-full">
+                                        <label className="label text-xs font-bold">Mô tả</label>
+                                        <textarea
+                                            className="textarea textarea-bordered h-24 text-sm"
+                                            value={localConfig.testimonials?.subtitle || ""}
+                                            onChange={(e) => handleChange("testimonials", "subtitle", e.target.value)}
+                                            placeholder="Những chia sẻ thực tế từ phụ huynh..."
+                                        />
+                                    </div>
+                                </div>
+                            )}
+
+                            {activeSection === "cta" && (
+                                <div className="space-y-4 animate-fade-in">
+                                    <h3 className="text-sm font-bold border-b pb-2 text-primary">Khối CTA cuối trang</h3>
+                                    <div className="form-control w-full">
+                                        <label className="label text-xs font-bold">Tiêu đề</label>
+                                        <input
+                                            type="text"
+                                            className="input input-bordered input-sm"
+                                            value={localConfig.cta?.title || ""}
+                                            onChange={(e) => handleChange("cta", "title", e.target.value)}
+                                            placeholder="Sẵn sàng khám phá bản thân?"
+                                        />
+                                    </div>
+                                    <div className="form-control w-full">
+                                        <label className="label text-xs font-bold">Mô tả</label>
+                                        <textarea
+                                            className="textarea textarea-bordered h-24 text-sm"
+                                            value={localConfig.cta?.subtitle || ""}
+                                            onChange={(e) => handleChange("cta", "subtitle", e.target.value)}
+                                            placeholder="Tham gia cùng hơn 50,000 người..."
+                                        />
+                                    </div>
+                                    <div className="grid grid-cols-1 gap-4">
+                                        <div className="form-control w-full">
+                                            <label className="label text-xs font-bold">Nút chính</label>
+                                            <input
+                                                type="text"
+                                                className="input input-bordered input-sm"
+                                                value={localConfig.cta?.primaryText || ""}
+                                                onChange={(e) => handleChange("cta", "primaryText", e.target.value)}
+                                                placeholder="Làm bài Test"
+                                            />
+                                        </div>
+                                        <div className="form-control w-full">
+                                            <label className="label text-xs font-bold">Nút phụ</label>
+                                            <input
+                                                type="text"
+                                                className="input input-bordered input-sm"
+                                                value={localConfig.cta?.secondaryText || ""}
+                                                onChange={(e) => handleChange("cta", "secondaryText", e.target.value)}
+                                                placeholder="Đăng ký tài khoản"
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="flex-1 flex flex-col bg-white overflow-hidden relative border-l border-base-300">
+                    <div className="p-2 bg-base-200 text-xs font-bold text-center uppercase tracking-wider text-base-content/50 border-b border-base-300 shrink-0 z-10 flex justify-between items-center px-4">
+                        <span>Live Preview</span>
+                        <span className="badge badge-sm badge-info">Realtime</span>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto bg-white custom-scrollbar relative scroll-smooth">
+                        <div id="preview-hero">
+                            <HeroSection config={localConfig.hero} />
+                        </div>
+                        <div id="preview-features">
+                            <FeaturesSection config={localConfig.features} />
+                        </div>
+                        <div id="preview-testimonials">
+                            <TestimonialsSection config={localConfig.testimonials} />
+                        </div>
+                        <div id="preview-cta">
+                            <LandingCtaPreview config={localConfig.cta} siteName={siteName} />
+                        </div>
+                        <footer className="bg-slate-900 text-white py-12 text-center opacity-50 pointer-events-none">
+                            <div className="text-sm">[Header, Footer và Slideshow được quản lý ở tab khác]</div>
+                        </footer>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+export default LandingPageEditor;

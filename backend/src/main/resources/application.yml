@@ -1,0 +1,74 @@
+server:
+  port: 8083
+
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5433/appdb}
+    username: ${DB_USER:appuser}
+    password: ${DB_PASSWORD:apppass}
+  mail:
+    host: ${MAIL_HOST:}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: ${MAIL_SMTP_AUTH:true}
+          starttls:
+            enable: ${MAIL_SMTP_STARTTLS_ENABLE:true}
+    default-encoding: UTF-8
+  servlet:
+    multipart:
+      max-file-size: ${MULTIPART_MAX_FILE_SIZE:10MB}
+      max-request-size: ${MULTIPART_MAX_REQUEST_SIZE:10MB}
+  jpa:
+    hibernate:
+      ddl-auto: none
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+jwt:
+  secret: ${JWT_SECRET:change-me-change-me-change-me-32}
+  expiration-ms: ${JWT_EXPIRATION_MS:86400000}
+  refresh-expiration-ms: ${JWT_REFRESH_EXPIRATION_MS:1209600000}
+  issuer: ${JWT_ISSUER:discwake-app}
+
+flyway:
+  enabled: true
+
+auth:
+  verification-expiration-minutes: ${AUTH_VERIFY_EXPIRE_MIN:1440}
+  reset-expiration-minutes: ${AUTH_RESET_EXPIRE_MIN:60}
+
+app:
+  base-url: ${APP_BASE_URL:http://localhost:5174}
+  cors-allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5174,http://127.0.0.1:5174,http://localhost:4174,http://127.0.0.1:4174}
+  upload-dir: ${APP_UPLOAD_DIR:backend/storage/uploads}
+  mail:
+    from: ${APP_MAIL_FROM:no-reply@disc.local}
+
+frontend:
+  settings:
+    site-name: ${FRONTEND_SITE_NAME:DISCWAKE}
+    site-description: ${FRONTEND_SITE_DESCRIPTION:Nen tang danh gia DISC}
+    contact-email: ${FRONTEND_CONTACT_EMAIL:support@disc.local}
+    contact-phone: ${FRONTEND_CONTACT_PHONE:1900-0000}
+    maintenance-mode: ${FRONTEND_MAINTENANCE_MODE:false}
+    bank-id: ${FRONTEND_BANK_ID:970422}
+    bank-name: ${FRONTEND_BANK_NAME:MB Bank}
+    account-number: ${FRONTEND_ACCOUNT_NUMBER:0000000000}
+    account-name: ${FRONTEND_ACCOUNT_NAME:DISC INSIGHT}
+
+telegram:
+  enabled: ${TELEGRAM_ENABLED:false}
+  bot-token: ${TELEGRAM_BOT_TOKEN:}
+  chat-id: ${TELEGRAM_CHAT_ID:}
+
+google:
+  oauth:
+    client-id: ${GOOGLE_OAUTH_CLIENT_ID:}
+    client-secret: ${GOOGLE_OAUTH_CLIENT_SECRET:}
+    client-ids: ${GOOGLE_OAUTH_CLIENT_IDS:}

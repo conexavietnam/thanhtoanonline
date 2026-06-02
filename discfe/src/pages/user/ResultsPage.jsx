@@ -1,0 +1,1111 @@
+import { useEffect, useState, useRef } from "react";
+import toast from "react-hot-toast";
+import { Link } from "react-router";
+import api, { pdfExportAPI, aiCareerAPI, learningAPI, publicPlanAPI } from "../../lib/api.js";
+import { useAuth } from "../../context/AuthContext.jsx";
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
+
+// Helpers to extract flexible trait score structures (Big Five, IKIGAI)
+const normalizeScoreArray = (raw) => {
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    return raw
+      .map((item) => {
+        const dimension = item.dimension || item.trait || item.name || item.label;
+        const score = Number(item.score ?? item.value ?? 0);
+        return dimension ? { dimension, score } : null;
+      })
+      .filter(Boolean);
+  }
+  if (typeof raw === "object") {
+    return Object.entries(raw)
+      .map(([key, value]) => ({ dimension: key, score: Number(value ?? 0) }))
+      .filter((item) => item.dimension);
+  }
+  return [];
+};
+
+const extractByPrefix = (raw, prefix) => {
+  if (!raw || typeof raw !== "object") return [];
+  const upper = prefix.toUpperCase();
+  return Object.entries(raw)
+    .filter(([key]) => String(key).toUpperCase().startsWith(upper))
+    .map(([key, value]) => ({
+      dimension: key.replace(new RegExp(`^${upper}_?`, "i"), "").toUpperCase() || key,
+      score: Number(value ?? 0),
+    }));
+};
+
+const collectTraitScores = (result) => {
+  const traitAverages = result?.traitAverages || result?.traitScores || result?.traits;
+
+  const bigFive =
+    normalizeScoreArray(result?.bigFiveScores || result?.bigFive || result?.bigfive) ||
+    [];
+  const bigFiveFromTraits = extractByPrefix(traitAverages, "BIG5");
+
+  const ikigai =
+    normalizeScoreArray(result?.ikigaiScores || result?.ikigai) ||
+    [];
+  const ikigaiFromTraits = extractByPrefix(traitAverages, "IKIGAI");
+
+  return {
+    bigFiveScores: bigFive.length ? bigFive : bigFiveFromTraits,
+    ikigaiScores: ikigai.length ? ikigai : ikigaiFromTraits,
+  };
+};
+
+const hasMeaningfulTraitScores = (items) =>
+  Array.isArray(items) && items.some((item) => item?.dimension && Number.isFinite(Number(item?.score)));
+
+const BIG_FIVE_LABELS = {
+  openness: "Cởi mở",
+  conscientiousness: "Tận tâm",
+  extraversion: "Hướng ngoại",
+  agreeableness: "Dễ chịu",
+  neuroticism: "Nhạy cảm cảm xúc",
+};
+
+const IKIGAI_LABELS = {
+  passion: "Đam mê",
+  strength: "Thế mạnh",
+  value: "Giá trị",
+  opportunity: "Cơ hội",
+};
+
+const formatTraitLabel = (type, dimension) => {
+  const normalized = String(dimension || "").trim().toLowerCase();
+  if (type === "bigFive") {
+    return BIG_FIVE_LABELS[normalized] || dimension;
+  }
+  if (type === "ikigai") {
+    return IKIGAI_LABELS[normalized] || dimension;
+  }
+  return dimension;
+};
+
+const normalizeTraitPercentage = (score) => {
+  const numeric = Number(score ?? 0);
+  if (!Number.isFinite(numeric)) return 0;
+  if (numeric <= 5) {
+    return Math.max(0, Math.min(100, Math.round((numeric / 5) * 100)));
+  }
+  return Math.max(0, Math.min(100, Math.round(numeric)));
+};
+
+const formatTraitScore = (score) => {
+  const numeric = Number(score ?? 0);
+  if (!Number.isFinite(numeric)) return "0/5";
+  if (numeric <= 5) {
+    return `${numeric.toFixed(1)}/5`;
+  }
+  return `${Math.round(numeric)}%`;
+};
+
+const TraitScoreCard = ({
+  title,
+  type,
+  items,
+  palettes,
+  emptyTitle,
+  emptyDescription,
+  action,
+}) => (
+  <article className="rounded-3xl border border-base-200 bg-base-100 p-6 shadow-sm">
+    <div className="flex items-center justify-between gap-2">
+      <h3 className="text-xl font-semibold text-base-content">{title}</h3>
+      <span className="badge badge-outline badge-sm">
+        {items.length ? `${items.length} chỉ số` : "Chưa có dữ liệu"}
+      </span>
+    </div>
+
+    {items.length > 0 ? (
+      <div className="mt-4 space-y-3">
+        {items.map((item, idx) => {
+          const pct = normalizeTraitPercentage(item.score);
+          const color = palettes[idx % palettes.length];
+
+          return (
+            <div key={item.dimension} className="space-y-1">
+              <div className="flex justify-between text-sm text-base-content/80">
+                <span className="font-semibold text-base-content">{formatTraitLabel(type, item.dimension)}</span>
+                <span>{formatTraitScore(item.score)}</span>
+              </div>
+              <div className="h-2 rounded-full bg-base-200 overflow-hidden">
+                <div className="h-full rounded-full" style={{ width: `${pct}%`, background: color }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    ) : (
+      <div className="mt-4 rounded-2xl border border-dashed border-base-300 bg-base-200/30 p-5">
+        <h4 className="text-base font-semibold text-base-content">{emptyTitle}</h4>
+        <p className="mt-2 text-sm text-base-content/70">{emptyDescription}</p>
+        {action ? <div className="mt-4">{action}</div> : null}
+      </div>
+    )}
+  </article>
+);
+
+const ResultsPage = () => {
+  const { user } = useAuth()
+  const [result, setResult] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const [canExportFree, setCanExportFree] = useState(false)
+  const [remainingFree, setRemainingFree] = useState(null)
+  const [canExportPaid, setCanExportPaid] = useState(false)
+  const [remainingPaid, setRemainingPaid] = useState(null)
+
+  const [canExportPDF, setCanExportPDF] = useState(false)
+  const [exportingPDF, setExportingPDF] = useState(false)
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false)
+  const [showExportOptionsModal, setShowExportOptionsModal] = useState(false)
+  const [pdfExportLimit, setPdfExportLimit] = useState(null)
+  const [pdfExportRemaining, setPdfExportRemaining] = useState(null)
+  const [pdfExportType, setPdfExportType] = useState(null)
+  const [reportFormat, setReportFormat] = useState(null)
+  const [aiCareers, setAiCareers] = useState([])
+  const [courses, setCourses] = useState([])
+  const [mentors, setMentors] = useState([])
+  const [loadingAI, setLoadingAI] = useState(false)
+  const [availablePlans, setAvailablePlans] = useState([]);
+  const [loadingPlans, setLoadingPlans] = useState(false);
+  const resultsContentRef = useRef(null)
+
+  useEffect(() => {
+    if (!error) return
+    toast.error(error)
+    setError(null)
+  }, [error])
+
+  const normalizeReportFormat = (value, exportTypeValue) => {
+    if (!value) {
+      const fallback = (exportTypeValue || "").toString().trim().toUpperCase()
+      if (fallback === "PAID") return "PAID_PDF"
+      if (fallback === "FREE") return "FREE_PDF"
+      return ""
+    }
+    const upper = value.toString().trim().toUpperCase()
+    if (upper === "BASIC") return "WEB_VIEW_BASIC"
+    if (upper === "PREMIUM" || upper === "STANDARD") return "PAID_PDF"
+    if (upper === "FREE") return "FREE_PDF"
+    return upper
+  }
+
+  const insightsEnabled = result?.insightsEnabled !== false
+  const careersEnabled = result?.careerRecommendationsEnabled !== false
+  const plansEnabled = result?.developmentPlansEnabled !== false
+
+  useEffect(() => {
+    const fetchResult = async () => {
+      try {
+        const { data } = await api.get("/disc/tests/latest", {
+          params: { preferDetailed: true },
+        })
+        setResult(data)
+      } catch (err) {
+        setError("Chưa có kết quả nào. Hãy làm bài test DISC trước.")
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchResult()
+  }, [])
+
+  useEffect(() => {
+    const checkPDFExportPermission = async () => {
+      if (!user) {
+        setCanExportPDF(false)
+        setCanExportFree(false)
+        setCanExportPaid(false)
+        return
+      }
+
+      try {
+        // Check PDF export limit
+        const testSessionId = result?.sessionId
+        const { data: limitCheck } = await pdfExportAPI.checkLimit(testSessionId)
+
+        const hasPersonalCredits = user?.pdfExportCredits > 0;
+        const isFreeExportSession = limitCheck.exportType === "FREE";
+        const canExportCombined = limitCheck.canExport || (!isFreeExportSession && hasPersonalCredits);
+        const canExportPaidCombined = limitCheck.canExportPaid || (!isFreeExportSession && hasPersonalCredits);
+
+        setCanExportPDF(canExportCombined)
+        setPdfExportLimit(limitCheck.limit)
+        setPdfExportRemaining(limitCheck.remaining)
+        setPdfExportType(limitCheck.exportType)
+        setReportFormat(normalizeReportFormat(limitCheck.reportType, limitCheck.exportType))
+
+        // Partner specific flags
+        setCanExportFree(limitCheck.canExportFree)
+        setRemainingFree(limitCheck.remainingFree)
+        setCanExportPaid(canExportPaidCombined)
+        
+        // If API says 0 remaining but user has personal credits, show personal credits count? 
+        // Or just trust API? 
+        // Better to show max of both if we are combining permissions
+        const displayRemainingPaid = (limitCheck.remainingPaid > 0 || limitCheck.remainingPaid === -1) 
+          ? limitCheck.remainingPaid 
+          : (!isFreeExportSession && hasPersonalCredits ? user.pdfExportCredits : 0);
+          
+        setRemainingPaid(displayRemainingPaid)
+
+      } catch (err) {
+        console.warn("Failed to check PDF export permission:", err)
+        setCanExportPDF(false)
+        setCanExportFree(false)
+        setCanExportPaid(false)
+      }
+    }
+
+    if (user && result) {
+      checkPDFExportPermission()
+      if (careersEnabled) {
+        loadAIRecommendations()
+        loadLearningRecommendations()
+      } else {
+        setAiCareers([])
+        setCourses([])
+        setMentors([])
+      }
+
+      // Record view
+      if (result.sessionId) {
+        pdfExportAPI.recordView(result.sessionId).catch(err => {
+          console.warn("Failed to record view:", err)
+        });
+      }
+    }
+  }, [user, result, careersEnabled])
+
+  const loadAIRecommendations = async () => {
+    if (!result?.sessionId) return
+    setLoadingAI(true)
+    try {
+      const { data } = await aiCareerAPI.getBySession(result.sessionId)
+      setAiCareers(data || [])
+    } catch (err) {
+      console.error("Failed to load AI recommendations:", err)
+    } finally {
+      setLoadingAI(false)
+    }
+  }
+
+  const loadPlans = async () => {
+    if (availablePlans.length > 0) return;
+    setLoadingPlans(true);
+    try {
+      // Only load USER plans, not partner plans (partner plans are for business partners)
+      const plansRes = await publicPlanAPI.getAll();
+      const userPlans = (plansRes.data || []).filter(plan => plan.active);
+      setAvailablePlans(userPlans);
+    } catch (err) {
+      console.error("Failed to load plans:", err);
+    } finally {
+      setLoadingPlans(false);
+    }
+  };
+
+
+  useEffect(() => {
+    if (showExportOptionsModal) {
+      loadPlans();
+    }
+  }, [showExportOptionsModal]);
+
+  const loadLearningRecommendations = async () => {
+    if (!result?.sessionId) return
+    try {
+      const [coursesRes, mentorsRes] = await Promise.all([
+        learningAPI.getCourses(result.sessionId),
+        learningAPI.getMentors(result.sessionId)
+      ])
+      setCourses(coursesRes.data || [])
+      setMentors(mentorsRes.data || [])
+    } catch (err) {
+      console.error("Failed to load learning recommendations:", err)
+    }
+  }
+
+  // Xử lý phím ESC để đóng modal
+  useEffect(() => {
+    const handleEscape = (e) => {
+      if (e.key === 'Escape' && showUpgradeModal) {
+        setShowUpgradeModal(false)
+      }
+    }
+
+    if (showUpgradeModal) {
+      document.addEventListener('keydown', handleEscape)
+      // Ngăn scroll khi modal mở
+      document.body.style.overflow = 'hidden'
+    }
+
+    return () => {
+      document.removeEventListener('keydown', handleEscape)
+      document.body.style.overflow = 'unset'
+    }
+  }, [showUpgradeModal])
+
+  const handleExportPDF = async (requestedType) => {
+    if (!result || exportingPDF) return
+
+    // If requestedType is provided (e.g. clicked specific button), use it.
+    // Otherwise fall back to the default determined by checkLimit
+    const typeToExport = requestedType || pdfExportType || 'PAID';
+
+    setExportingPDF(true)
+    try {
+      // Re-determine report format based on the chosen export type
+      let currentReportFormat = reportFormat;
+      if (requestedType) {
+        // If user purposefully chose FREE or PAID, we might need to adjust format
+        if (requestedType === 'FREE') currentReportFormat = 'FREE_PDF';
+        if (requestedType === 'PAID') currentReportFormat = 'PAID_PDF';
+        // Or rely on normalize logic if needed, but explicit is better here.
+      }
+
+      const normalizedReportFormat = normalizeReportFormat(currentReportFormat, typeToExport)
+
+      if (normalizedReportFormat === 'WEB_VIEW_BASIC') {
+        // Client-side PDF generation
+        const element = resultsContentRef.current
+        if (!element) throw new Error("Content not found")
+
+        const canvas = await html2canvas(element, {
+          scale: 2,
+          useCORS: true,
+          logging: false,
+          backgroundColor: '#ffffff'
+        })
+
+        const imgData = canvas.toDataURL('image/jpeg', 1.0)
+        const pdf = new jsPDF('p', 'mm', 'a4')
+        const pdfWidth = pdf.internal.pageSize.getWidth()
+        const pdfHeight = pdf.internal.pageSize.getHeight()
+        const imgWidth = canvas.width
+        const imgHeight = canvas.height
+        const ratio = Math.min(pdfWidth / imgWidth, pdfHeight / imgHeight)
+        const imgX = (pdfWidth - imgWidth * ratio) / 2
+        const imgY = 30
+
+        // Add title
+        pdf.setFontSize(18)
+        pdf.text("Báo cáo DISC cá nhân hoá", pdfWidth / 2, 20, { align: "center" })
+
+        // Add content image
+        // Calculate height based on width ratio to fit page
+        const contentWidth = pdfWidth - 20 // margin 10mm each side
+        const contentHeight = (imgHeight * contentWidth) / imgWidth
+
+        let heightLeft = contentHeight
+        let position = 0
+        let pageHeight = pdfHeight - 20 // margin
+
+        // First page
+        pdf.addImage(imgData, 'JPEG', 10, 30, contentWidth, contentHeight)
+
+        // Save
+        pdf.save(`DISC_Report_Basic_${new Date().toISOString().split('T')[0]}.pdf`)
+
+        // Record usage
+        await pdfExportAPI.recordExport({ testSessionId: result.sessionId, exportType: typeToExport })
+
+      } else {
+        // Standard Backend PDF
+        // Pass exportType to download API
+        const response = await pdfExportAPI.download(result.sessionId, typeToExport)
+
+        const url = window.URL.createObjectURL(new Blob([response.data]))
+        const link = document.createElement('a')
+        link.href = url
+        link.setAttribute('download', `DISC_Report_${typeToExport}_${new Date().toISOString().split('T')[0]}.pdf`)
+        document.body.appendChild(link)
+        link.click()
+        link.remove()
+        window.URL.revokeObjectURL(url)
+      }
+
+      // Refresh limit check
+      const { data: limitCheck } = await pdfExportAPI.checkLimit(result.sessionId)
+      setPdfExportRemaining(limitCheck.remaining)
+      setCanExportPDF(limitCheck.canExport)
+      setPdfExportType(limitCheck.exportType)
+      setReportFormat(normalizeReportFormat(limitCheck.reportType, limitCheck.exportType))
+
+      setCanExportFree(limitCheck.canExportFree)
+      setRemainingFree(limitCheck.remainingFree)
+      setCanExportPaid(limitCheck.canExportPaid)
+      setRemainingPaid(limitCheck.remainingPaid)
+
+    } catch (err) {
+      console.error("Failed to export PDF:", err)
+      const errorMessage = err.response?.status === 403
+        ? "Bạn đã hết lượt tải báo cáo. Vui lòng nâng cấp gói."
+        : "Đã xảy ra lỗi khi tạo báo cáo. Vui lòng thử lại sau."
+      toast.error(`Không thể xuất PDF: ${errorMessage}`)
+    } finally {
+      setExportingPDF(false)
+    }
+  }
+
+  const handleUpgradeClick = async (e) => {
+    // Prevent default immediately if it's a link click being intercepted, 
+    // but here we might attach it to onClick of Link or button.
+    // If it's a Link, we should probably record then navigate, or record non-blocking.
+
+    if (result?.sessionId) {
+      try {
+        await pdfExportAPI.recordClickPay(result.sessionId);
+      } catch (err) {
+        console.error("Failed to record click pay:", err);
+      }
+    }
+    // No preventDefault here usually, allowing navigation to proceed. 
+    // If used in onClick of Link, it runs before navigation.
+  };
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[40vh] items-center justify-center">
+        <span className="loading loading-spinner loading-lg text-primary" />
+      </div>
+    )
+  }
+
+  if (!result) {
+    return (
+      <div className="alert alert-info">
+        <span>Chưa có kết quả nào. Hãy làm bài test DISC trước.</span>
+        <Link to="/test" className="btn btn-primary btn-sm ml-auto">
+          Làm bài Test
+        </Link>
+      </div>
+    )
+  }
+
+  const { bigFiveScores, ikigaiScores } = collectTraitScores(result || {});
+  const showBigFiveCard = hasMeaningfulTraitScores(bigFiveScores);
+  const showIkigaiCard = hasMeaningfulTraitScores(ikigaiScores);
+  const isFreePreviewResult =
+    String(result?.testMode || "").toUpperCase() === "FREE" || result?.fullDetailUnlocked === false;
+  const canOpenPaidFlow = canExportPaid || (remainingPaid ?? 0) > 0 || (user?.pdfExportCredits ?? 0) > 0;
+  const traitActionTarget = isFreePreviewResult ? (canOpenPaidFlow ? "/test" : "/plans") : null;
+  const traitActionLabel = isFreePreviewResult
+    ? canOpenPaidFlow
+      ? "Làm bài trả phí để mở"
+      : "Nâng cấp để mở"
+    : null;
+  const hasAnyExportOption = canExportFree || canExportPaid;
+
+  return (
+    <div className="space-y-10">
+      <header className="space-y-3">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex-1">
+            <h2 className="text-4xl font-semibold text-base-content">Báo cáo DISC cá nhân hoá</h2>
+            <p className="text-base text-base-content/70 mt-2">
+              Khám phá hành vi nổi bật, nghề nghiệp phù hợp và lộ trình phát triển theo top nhóm DISC:{" "}
+              {result.topDimensions.join(" & ")}.
+            </p>
+          </div>
+          <div className="flex flex-col items-end gap-2">
+            {/* Unified Export Button */}
+            {/* Unified Export Button */}
+            <button
+              onClick={() => {
+                setShowExportOptionsModal(true);
+              }}
+              disabled={exportingPDF}
+              className="btn btn-primary gap-2"
+            >
+              {exportingPDF ? (
+                <>
+                  <span className="loading loading-spinner loading-sm"></span>
+                  Đang xuất PDF...
+                </>
+              ) : (
+                <>
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  Xuất báo cáo PDF
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <div id="results-content" ref={resultsContentRef} className="space-y-10">
+        <section className="grid gap-6 md:grid-cols-2">
+          <TraitScoreCard
+            title="Big Five"
+            type="bigFive"
+            items={showBigFiveCard ? bigFiveScores : []}
+            palettes={["#0ea5e9", "#fbbf24", "#8b5cf6", "#10b981", "#f43f5e"]}
+            emptyTitle={isFreePreviewResult ? "Phiên này chưa có dữ liệu Big Five" : "Chưa có dữ liệu Big Five"}
+            emptyDescription={
+              isFreePreviewResult
+                ? "Phiên kết quả này chưa có phần Big Five. Hãy làm lại bài test miễn phí mới hoặc mở bài test trả phí để xem đầy đủ nhóm chỉ số Big Five."
+                : "Kết quả hiện tại chưa có đủ dữ liệu để hiển thị nhóm chỉ số Big Five."
+            }
+            action={
+              traitActionTarget && traitActionLabel ? (
+                <Link to={traitActionTarget} className="btn btn-primary btn-sm">
+                  {traitActionLabel}
+                </Link>
+              ) : null
+            }
+          />
+
+          <TraitScoreCard
+            title="IKIGAI"
+            type="ikigai"
+            items={showIkigaiCard ? ikigaiScores : []}
+            palettes={["#2563eb", "#16a34a", "#ea580c", "#0891b2"]}
+            emptyTitle={isFreePreviewResult ? "Phiên này chưa có dữ liệu IKIGAI" : "Chưa có dữ liệu IKIGAI"}
+            emptyDescription={
+              isFreePreviewResult
+                ? "Phiên kết quả này chưa có phần IKIGAI. Hãy làm lại bài test miễn phí mới hoặc mở bài test trả phí để xem các trục động lực và định hướng nghề nghiệp."
+                : "Kết quả hiện tại chưa có đủ dữ liệu để hiển thị nhóm chỉ số IKIGAI."
+            }
+            action={
+              traitActionTarget && traitActionLabel ? (
+                <Link to={traitActionTarget} className="btn btn-primary btn-sm">
+                  {traitActionLabel}
+                </Link>
+              ) : null
+            }
+          />
+        </section>
+
+        <section className="grid gap-6 md:grid-cols-2">
+          <article className="rounded-3xl border border-base-200 bg-base-100 p-6 shadow-sm">
+            <h3 className="text-2xl font-semibold text-base-content">Điểm số từng nhóm</h3>
+            <div className="mt-4 space-y-3">
+              {result.dimensionScores.map((score) => {
+                const totalScore = result.dimensionScores.reduce((sum, item) => sum + item.score, 0);
+                const percentage = totalScore > 0 ? Math.round((score.score / totalScore) * 100) : 0;
+
+                return (
+                  <div
+                    key={score.dimension}
+                    className="flex items-center justify-between rounded-2xl bg-base-200/50 px-4 py-3"
+                  >
+                    <span className="text-base font-semibold text-base-content">{score.dimension}</span>
+                    <span className="text-base text-base-content/70">{percentage}%</span>
+                  </div>
+                )
+              })}
+            </div>
+          </article>
+          <article className="rounded-3xl border border-base-200 bg-base-100 p-6 shadow-sm">
+            <h3 className="text-2xl font-semibold text-base-content">Nhóm nổi trội</h3>
+            <p className="mt-3 text-base text-base-content/70">
+              Bạn có xu hướng {result.topDimensions.join(" & ")} — kết hợp giữa những ưu thế về hành động, ảnh hưởng, ổn
+              định hoặc tuân thủ.
+            </p>
+          </article>
+        </section>
+
+        {insightsEnabled && result.insights?.length > 0 && (
+          <section className="space-y-4">
+            <h3 className="text-2xl font-semibold text-base-content">Điểm mạnh & hành vi nổi bật</h3>
+            <div className="grid gap-4 md:grid-cols-2">
+              {result.insights.map((insight) => (
+                <article key={insight.dimension} className="rounded-3xl border border-base-200 bg-base-100 p-6 shadow-sm">
+                  <h4 className="text-base font-semibold text-primary">Nhóm {insight.dimension}</h4>
+                  <p className="mt-2 text-base text-base-content/80">{insight.summary}</p>
+                  <div className="mt-3 space-y-1 text-sm text-base-content/70">
+                    <p>
+                      <strong>Hành vi chính:</strong> {insight.keyBehaviors}
+                    </p>
+                    <p>
+                      <strong>Điểm mạnh:</strong> {insight.strengths}
+                    </p>
+                    <p>
+                      <strong>Điểm cần lưu ý:</strong> {insight.weaknesses}
+                    </p>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {careersEnabled && result.careerRecommendations?.length > 0 && (
+          <section className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-2xl font-semibold text-base-content">Nghề nghiệp đề xuất</h3>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              {result.careerRecommendations.map((career) => (
+                <article key={career.jobTitle} className="rounded-3xl border border-base-200 bg-base-100 p-6 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-lg font-semibold text-base-content">{career.jobTitle}</h4>
+                    <span className="badge badge-primary badge-outline">{career.matchLevel}% phù hợp</span>
+                  </div>
+                  <p className="mt-2 text-base text-base-content/70">{career.summary}</p>
+                  <p className="mt-3 text-sm text-base-content/70">
+                    <strong>Kỹ năng nên rèn luyện:</strong> {career.skills}
+                  </p>
+                  {career.learningResources && (
+                    <p className="mt-1 text-sm text-base-content/60">
+                      <strong>Tài nguyên gợi ý:</strong> {career.learningResources}
+                    </p>
+                  )}
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* AI-Powered Career Recommendations */}
+        {careersEnabled && loadingAI ? (
+          <section className="space-y-4">
+            <h3 className="text-2xl font-semibold text-base-content flex items-center gap-2">
+              <span>🤖</span> Gợi ý nghề nghiệp AI (Machine Learning)
+            </h3>
+            <div className="flex items-center justify-center py-8">
+              <span className="loading loading-spinner text-primary" />
+            </div>
+          </section>
+        ) : careersEnabled && aiCareers.length > 0 && (
+          <section className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-2xl font-semibold text-base-content flex items-center gap-2">
+                <span>🤖</span> Gợi ý nghề nghiệp AI (Machine Learning)
+              </h3>
+              <span className="badge badge-success badge-sm">Độ chính xác cao</span>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {aiCareers.map((career) => (
+                <article key={career.id} className="rounded-3xl border border-primary/20 bg-gradient-to-br from-primary/5 to-base-100 p-6 shadow-sm">
+                  <div className="flex items-start justify-between mb-3">
+                    <h4 className="text-lg font-semibold text-base-content flex-1">{career.jobTitle}</h4>
+                    <div className="flex flex-col items-end gap-1">
+                      <span className="badge badge-primary badge-sm">
+                        {Number(career.matchScore).toFixed(1)}% phù hợp
+                      </span>
+                      {career.confidenceLevel && (
+                        <span className="badge badge-success badge-xs">
+                          Độ tin cậy: {Number(career.confidenceLevel).toFixed(0)}%
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {career.reasoning && (
+                    <p className="text-sm text-base-content/70 mb-3 italic">"{career.reasoning}"</p>
+                  )}
+
+                  <div className="space-y-2 text-sm">
+                    {career.requiredSkills && career.requiredSkills.length > 0 && (
+                      <div>
+                        <strong className="text-base-content/80">Kỹ năng cần thiết:</strong>
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {career.requiredSkills.map((skill, idx) => (
+                            <span key={idx} className="badge badge-outline badge-xs">{skill}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {career.marketDemand && (
+                      <div className="flex items-center gap-2">
+                        <strong className="text-base-content/80">Nhu cầu thị trường:</strong>
+                        <span className={`badge badge-xs ${career.marketDemand === 'HIGH' ? 'badge-success' :
+                          career.marketDemand === 'MEDIUM' ? 'badge-warning' : 'badge-error'
+                          }`}>
+                          {career.marketDemand}
+                        </span>
+                      </div>
+                    )}
+
+                    {career.growthPotential && (
+                      <div className="flex items-center gap-2">
+                        <strong className="text-base-content/80">Tiềm năng phát triển:</strong>
+                        <span className={`badge badge-xs ${career.growthPotential === 'HIGH' ? 'badge-success' :
+                          career.growthPotential === 'MEDIUM' ? 'badge-warning' : 'badge-error'
+                          }`}>
+                          {career.growthPotential}
+                        </span>
+                      </div>
+                    )}
+
+                    {career.salaryRangeMin && career.salaryRangeMax && (
+                      <div>
+                        <strong className="text-base-content/80">Mức lương:</strong>
+                        <span className="ml-2 text-success font-semibold">
+                          {new Intl.NumberFormat("vi-VN").format(career.salaryRangeMin)} - {new Intl.NumberFormat("vi-VN").format(career.salaryRangeMax)} {career.currency}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Courses & Mentors Recommendations */}
+        {careersEnabled && (courses.length > 0 || mentors.length > 0) && (
+          <section className="space-y-6">
+            <h3 className="text-2xl font-semibold text-base-content">Khóa học & Mentor phù hợp</h3>
+
+            {courses.length > 0 && (
+              <div>
+                <h4 className="text-lg font-semibold text-base-content mb-4">📚 Khóa học đề xuất</h4>
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {courses.map((course) => (
+                    <article key={course.id} className="rounded-xl border border-base-200 bg-base-100 p-4 shadow-sm hover:shadow-md transition">
+                      <h5 className="font-semibold text-base-content">{course.title}</h5>
+                      {course.provider && (
+                        <p className="text-xs text-base-content/60 mt-1">Bởi {course.provider}</p>
+                      )}
+                      {course.description && (
+                        <p className="text-sm text-base-content/70 mt-2 line-clamp-2">{course.description}</p>
+                      )}
+                      <div className="mt-3 flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-sm">
+                          {course.price && course.price > 0 ? (
+                            <span className="font-semibold text-primary">
+                              {new Intl.NumberFormat("vi-VN").format(course.price)} {course.currency}
+                            </span>
+                          ) : (
+                            <span className="badge badge-success badge-sm">Miễn phí</span>
+                          )}
+                          {course.rating && (
+                            <span className="text-base-content/60">â­ {Number(course.rating).toFixed(1)}</span>
+                          )}
+                        </div>
+                        {course.url && (
+                          <a
+                            href={course.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn btn-sm btn-primary btn-outline"
+                          >
+                            Xem khóa học
+                          </a>
+                        )}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {mentors.length > 0 && (
+              <div>
+                <h4 className="text-lg font-semibold text-base-content mb-4">👨‍🏫 Mentor đề xuất</h4>
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {mentors.map((mentor) => (
+                    <article key={mentor.id} className="rounded-xl border border-base-200 bg-base-100 p-4 shadow-sm hover:shadow-md transition">
+                      <div className="flex items-start gap-3">
+                        {mentor.profileImageUrl && (
+                          <img
+                            src={mentor.profileImageUrl}
+                            alt={mentor.fullName}
+                            className="w-16 h-16 rounded-full object-cover"
+                          />
+                        )}
+                        <div className="flex-1">
+                          <h5 className="font-semibold text-base-content">{mentor.fullName}</h5>
+                          {mentor.experienceYears && (
+                            <p className="text-xs text-base-content/60">{mentor.experienceYears} năm kinh nghiệm</p>
+                          )}
+                          {mentor.bio && (
+                            <p className="text-sm text-base-content/70 mt-2 line-clamp-2">{mentor.bio}</p>
+                          )}
+                          {mentor.expertiseAreas && mentor.expertiseAreas.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-2">
+                              {mentor.expertiseAreas.slice(0, 3).map((area, idx) => (
+                                <span key={idx} className="badge badge-outline badge-xs">{area}</span>
+                              ))}
+                            </div>
+                          )}
+                          <div className="mt-3 flex items-center justify-between">
+                            {mentor.hourlyRate && mentor.hourlyRate > 0 && (
+                              <span className="text-sm font-semibold text-primary">
+                                {new Intl.NumberFormat("vi-VN").format(mentor.hourlyRate)} {mentor.currency}/giờ
+                              </span>
+                            )}
+                            {mentor.linkedinUrl && (
+                              <a
+                                href={mentor.linkedinUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="btn btn-sm btn-primary btn-outline"
+                              >
+                                Liên hệ
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
+        )}
+
+        {plansEnabled && result.developmentPlans?.length > 0 && (
+          <section className="space-y-4">
+            <h3 className="text-2xl font-semibold text-base-content">Lộ trình 3–6 tháng đề xuất</h3>
+            <div className="grid gap-4 md:grid-cols-2">
+              {result.developmentPlans.map((plan) => (
+                <article
+                  key={`${plan.dimension}-${plan.focusArea}`}
+                  className="rounded-3xl border border-base-200 bg-base-100 p-6 shadow-sm"
+                >
+                  <h4 className="text-base font-semibold text-primary">{plan.focusArea}</h4>
+                  <p className="mt-1 text-sm text-base-content/70">Thời gian: {plan.timeline}</p>
+                  <p className="mt-3 text-base text-base-content/80">{plan.objectives}</p>
+                  <p className="mt-2 text-sm text-base-content/70">
+                    <strong>Hành động:</strong> {plan.actions}
+                  </p>
+                  {plan.resources && (
+                    <p className="mt-2 text-sm text-base-content/60">
+                      <strong>Tài nguyên:</strong> {plan.resources}
+                    </p>
+                  )}
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
+      </div>
+
+      {/* Modal lựa chọn xuất PDF / Nâng cấp */}
+      {showExportOptionsModal && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowExportOptionsModal(false)
+          }}
+        >
+          <div className="bg-base-100 rounded-2xl shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto relative" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2 z-10"
+              onClick={() => setShowExportOptionsModal(false)}
+            >
+              ✕
+            </button>
+
+            {/* Export flow */}
+            {hasAnyExportOption ? (
+              <div className="p-8">
+                <div className="text-center mb-8">
+                  <h3 className="text-2xl font-bold mb-2">Chọn loại báo cáo</h3>
+                  <p className="text-base-content/70">Tải báo cáo DISC cho phiên test hiện tại.</p>
+                  {user?.pdfExportCredits > 0 && (
+                    <div className="mt-3 inline-flex items-center gap-2 bg-success/10 text-success px-4 py-2 rounded-full">
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                      <span className="font-semibold">Bạn còn {user.pdfExportCredits} credit trả phí</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className={`mx-auto grid gap-6 ${canExportFree && canExportPaid ? 'max-w-5xl md:grid-cols-2' : 'max-w-3xl'}`}>
+                  {canExportFree && (
+                    <div className="card bg-base-100 border border-secondary/30 shadow-lg">
+                      <div className="card-body p-6">
+                        <div className="flex items-center justify-between mb-4">
+                          <h4 className="text-xl font-bold">Báo cáo Miễn phí</h4>
+                          <div className="badge badge-lg badge-secondary">FREE</div>
+                        </div>
+                        <ul className="text-sm space-y-3 mb-6 flex-1">
+                          <li className="flex items-start gap-2">
+                            <span className="text-success text-lg">✓</span>
+                            <span>Xuất báo cáo ngay cho phiên DISC Free</span>
+                          </li>
+                          <li className="flex items-start gap-2">
+                            <span className="text-success text-lg">✓</span>
+                            <span>Sử dụng template báo cáo free riêng</span>
+                          </li>
+                          <li className="flex items-start gap-2">
+                            <span className="text-success text-lg">✓</span>
+                            {/* Quốc Trí: sửa lại dấu tiếng Việt cho mô tả báo cáo miễn phí. */}
+                            <span>Không trừ credit khi tải phiên free</span>
+                          </li>
+                        </ul>
+                        <button
+                          onClick={() => {
+                            setShowExportOptionsModal(false);
+                            handleExportPDF('FREE');
+                          }}
+                          className="btn btn-secondary btn-lg w-full"
+                        >
+                          Tải xuống báo cáo free
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {canExportPaid && (
+                    <div className="card bg-gradient-to-br from-primary/5 to-secondary/5 border-2 border-primary shadow-lg hover:shadow-xl transition-all ring-2 ring-primary/20">
+                      <div className="card-body p-6">
+                        <div className="flex items-center justify-between mb-4">
+                          <h4 className="text-xl font-bold">Báo cáo Trả phí</h4>
+                          <div className="badge badge-lg badge-primary">PREMIUM</div>
+                        </div>
+                        <ul className="text-sm space-y-3 mb-6 flex-1">
+                          <li className="flex items-start gap-2">
+                            <span className="text-success text-lg">✓</span>
+                            <span>Tổng quan nhóm tính cách và biểu đồ chi tiết</span>
+                          </li>
+                          <li className="flex items-start gap-2">
+                            <span className="text-success text-lg">✓</span>
+                            <span className="font-semibold">Phân tích chuyên sâu điểm mạnh/yếu</span>
+                          </li>
+                          <li className="flex items-start gap-2">
+                            <span className="text-success text-lg">✓</span>
+                            <span className="font-semibold">Gợi ý nghề nghiệp AI (Machine Learning)</span>
+                          </li>
+                          <li className="flex items-start gap-2">
+                            <span className="text-success text-lg">✓</span>
+                            <span className="font-semibold">Lộ trình phát triển cá nhân hóa</span>
+                          </li>
+                        </ul>
+                        {remainingPaid !== null && remainingPaid >= 0 && (
+                          <p className="text-xs text-primary/80 mb-3 font-semibold">Còn lại: {remainingPaid} credit</p>
+                        )}
+                        <p className="text-xs text-base-content/60 mb-3">
+                          Phiên trả phí đã tạo sẽ không bị trừ thêm credit khi tải báo cáo.
+                        </p>
+                        <button
+                          onClick={() => {
+                            setShowExportOptionsModal(false);
+                            handleExportPDF('PAID');
+                          }}
+                          className="btn btn-primary btn-lg w-full"
+                        >
+                          Tải xuống báo cáo premium
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              /* No credits - show upgrade plans */
+              <div className="py-6 px-2">
+                <div className="text-center mb-8">
+                  <h3 className="text-2xl font-bold mb-2">Chọn gói báo cáo phù hợp</h3>
+                  <p className="text-base-content/70">Mở khóa tiềm năng của bạn với báo cáo chi tiết chuyên sâu</p>
+                </div>
+
+                {loadingPlans ? (
+                  <div className="flex justify-center py-12">
+                    <span className="loading loading-spinner loading-lg text-primary"></span>
+                  </div>
+                ) : (
+                  <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 max-w-6xl mx-auto">
+                    {/* Paid Plans */}
+                    {availablePlans.map(plan => (
+                      <div key={plan.id} className={`card bg-base-100 border ${plan.highlighted ? 'border-primary shadow-lg ring-2 ring-primary/20' : 'border-base-200 shadow'} hover:shadow-md transition-shadow relative`}>
+                        {plan.highlighted && (
+                          <div className="absolute -top-3 left-1/2 -translate-x-1/2 badge badge-primary">Phổ biến nhất</div>
+                        )}
+                        <div className="card-body p-6">
+                          <h4 className="text-lg font-bold">{plan.name}</h4>
+                          <div className="my-4">
+                            <span className="text-3xl font-bold text-primary">{new Intl.NumberFormat("vi-VN").format(plan.price)}</span>
+                            <span className="text-sm text-base-content/60"> {plan.currency}</span>
+                          </div>
+                          <p className="text-sm text-base-content/70 mb-4 h-10 line-clamp-2">{plan.description}</p>
+
+                          <ul className="text-sm space-y-2 mb-6 flex-1">
+                            {plan.features && plan.features.slice(0, 4).map((feature, idx) => (
+                              <li key={idx} className="flex items-start gap-2">
+                                <span className="text-success">✓</span>
+                                <span className="line-clamp-2">{feature}</span>
+                              </li>
+                            ))}
+                            {plan.features && plan.features.length > 4 && (
+                              <li className="text-xs text-base-content/50 italic">+ {plan.features.length - 4} tính năng khác</li>
+                            )}
+                          </ul>
+
+                          <Link
+                            to={`/checkout?plan=${plan.code}`}
+                            className={`btn w-full ${plan.highlighted ? 'btn-primary' : 'btn-outline btn-primary'}`}
+                            onClick={() => {
+                              handleUpgradeClick(); // Record click
+                            }}
+                          >
+                            Nâng cấp ngay
+                          </Link>
+                        </div>
+                      </div>
+                    ))}
+                    {/* Footer Note */}
+                    <div className="text-center mt-8 text-sm text-base-content/50">
+                      <p>Cần hỗ trợ? Liên hệ với chúng tôi qua email hoặc hotline.</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal nâng cấp (Giữ nguyên logic cũ nếu có) */}
+      {
+        showUpgradeModal && (
+          <div
+            className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setShowUpgradeModal(false)
+            }}
+          >
+            <div className="modal-box max-w-md relative" onClick={(e) => e.stopPropagation()}>
+              <button
+                className="btn btn-sm btn-circle btn-ghost absolute right-2 top-2"
+                onClick={() => setShowUpgradeModal(false)}
+              >
+                ✕
+              </button>
+              <h3 className="font-bold text-lg mb-4 pr-8">Mở khóa lộ trình phát triển chuyên sâu</h3>
+              <p className="text-base-content/70 mb-6">
+                Để xem chi tiết lộ trình phát triển 3-6 tháng được cá nhân hóa với các mục tiêu cụ thể, hành động thực tế và tài nguyên học tập, bạn cần nâng cấp lên gói Cá Nhân.
+              </p>
+              <div className="modal-action">
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => setShowUpgradeModal(false)}
+                >
+                  Đóng
+                </button>
+                <Link
+                  to="/plans"
+                  className="btn btn-primary"
+                  onClick={() => {
+                    handleUpgradeClick();
+                    setShowUpgradeModal(false);
+                  }}
+                >
+                  Nâng cấp ngay
+                </Link>
+              </div>
+            </div>
+          </div>
+        )
+      }
+    </div >
+  )
+}
+
+export default ResultsPage

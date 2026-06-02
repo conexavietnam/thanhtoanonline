@@ -1,0 +1,85 @@
+name: discwake
+
+networks:
+  discwake_net:
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: discwake-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD}
+      POSTGRES_DB: ${DISCWAKE_DB_NAME}
+    volumes:
+      - discwake_db_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT}:5432"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_ADMIN_USER}
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - discwake_net
+    restart: unless-stopped
+
+  discwake-backend:
+    image: discwake-backend:latest
+    container_name: discwake-backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://discwake-postgres:5432/${DISCWAKE_DB_NAME}
+      DB_USER: ${DISCWAKE_DB_USER}
+      DB_PASSWORD: ${DISCWAKE_DB_PASSWORD}
+      JWT_SECRET: ${DISCWAKE_JWT_SECRET}
+      JWT_EXPIRATION_MS: 86400000
+      JWT_REFRESH_EXPIRATION_MS: 1209600000
+      JWT_ISSUER: ${DISCWAKE_JWT_ISSUER}
+      APP_BASE_URL: ${DISCWAKE_APP_BASE_URL}
+      APP_CORS_ALLOWED_ORIGINS: ${DISCWAKE_APP_CORS_ALLOWED_ORIGINS}
+      AUTH_VERIFY_EXPIRE_MIN: 1440
+      AUTH_RESET_EXPIRE_MIN: 60
+      GOOGLE_OAUTH_CLIENT_ID: ${DISCWAKE_GOOGLE_OAUTH_CLIENT_ID}
+      GOOGLE_OAUTH_CLIENT_IDS: ${DISCWAKE_GOOGLE_OAUTH_CLIENT_IDS}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${DISCWAKE_GOOGLE_OAUTH_CLIENT_SECRET}
+      MAIL_HOST: ${MAIL_HOST}
+      MAIL_PORT: ${MAIL_PORT}
+      MAIL_USERNAME: ${MAIL_USERNAME}
+      MAIL_PASSWORD: ${MAIL_PASSWORD}
+      MAIL_SMTP_AUTH: ${MAIL_SMTP_AUTH}
+      MAIL_SMTP_STARTTLS_ENABLE: ${MAIL_SMTP_STARTTLS_ENABLE}
+      APP_MAIL_FROM: ${APP_MAIL_FROM}
+      APP_UPLOAD_DIR: /app/storage/uploads
+      SERVER_PORT: 8083
+    volumes:
+      - root_discwake_backend_uploads:/app/storage/uploads
+    ports:
+      - "127.0.0.1:${DISCWAKE_BACKEND_PORT}:8083"
+    networks:
+      discwake_net:
+        aliases:
+          - backend
+    restart: unless-stopped
+
+  discwake-frontend:
+    image: discwake-frontend:latest
+    container_name: discwake-frontend
+    depends_on:
+      - discwake-backend
+    ports:
+      - "127.0.0.1:${DISCWAKE_FRONTEND_PORT}:80"
+    networks:
+      - discwake_net
+    restart: unless-stopped
+
+volumes:
+  discwake_db_data:
+    driver: local
+  root_discwake_backend_uploads:
+    external: true
